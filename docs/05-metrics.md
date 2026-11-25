@@ -35,7 +35,7 @@ GROUP BY role ORDER BY tok DESC;
 ## 2. 게이트 적발 수
 
 **정의**: 주 1회 게이트 실행에서 잡힌 항목 수와, 그중 실제로 고친 수.
-**측정**: 실행 로그를 `~/.hermes/state/touchstone/last.json`에 남기고 비교 (2단계에서 스크립트화).
+**측정**: 실행 로그를 `~/.hermes/state/slopgate/last.json`에 남기고 비교 (2단계에서 스크립트화).
 
 목표: 적발 → 수정 비율 80% 이상. 적발 수가 계속 0이면 게이트가 죽었는지 의심한다.
 

@@ -1,14 +1,13 @@
-# touchstone
+# slopgate
 
-> 조각을 문질러 금인지 아닌지 가려내는 돌.
-> 에이전트를 혼내는 대신, 가려내는 기준을 만든다.
+> slop이 통과하지 못하는 검문소.
+> 에이전트를 혼내는 대신, 검사로 막는다.
 
-`hermes-touchstone` — [Lauren Tan(poteto)의 강연 "All Code Is Slop (Except Mine)"](https://www.youtube.com/watch?v=O_zcc6Xl12g)
+이름 그대로다. **slop**(검증되지 않은 산출물) + **gate**(검문소). 게이트를 통과하지 못하면 밖으로 나가지 않는다.
+
+[Lauren Tan(poteto)의 강연 "All Code Is Slop (Except Mine)"](https://www.youtube.com/watch?v=O_zcc6Xl12g)
 (2026-11, AI Engineer)의 논리를 내 Hermes 에이전트 운영에 옮기기 위한 준비 저장소다.
 당장 적용하지 않는다. 방학에 4단계로 진행하고, 그 전에 기준선과 게이트 뼈대를 고정해 둔다.
-
-이름은 강연의 "slop을 gold로 바꾼다"에서 가져왔다. touchstone은 금의 순도를 판정하는 기준돌이고,
-여기서는 판단(리뷰)이 아니라 검사가 그 역할을 한다.
 
 ## 왜 이 저장소가 필요한가
 
