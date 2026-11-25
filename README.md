@@ -50,6 +50,7 @@ docs/
   04-roadmap.md        방학 4단계 계획 + 완료 기준
   05-metrics.md        성공 지표와 측정 방법
   06-open-questions.md 방학 전에 정할 것
+  07-pstack.md         강연의 실제 산출물(pstack) 이식 목록 — 가져올 것/못 가져올 것
 templates/
   correction-to-gate.md  "또 같은 실수" → 게이트로 바꾸는 양식
   gate-spec.md           게이트 명세 양식
