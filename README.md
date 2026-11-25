@@ -83,4 +83,5 @@ python3 gates/skill_lint.py    # 개별
 ## 출처
 
 - 강연: <https://www.youtube.com/watch?v=O_zcc6Xl12g>
+- 한국어 해설(슬라이드 세부 보강): <https://youtu.be/ueA116hO_ho>
 - pstack (강연에서 언급된 공개 플레이북): <https://github.com/cursor/plugins/tree/main/pstack>
