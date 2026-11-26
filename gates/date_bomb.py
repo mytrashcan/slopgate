@@ -120,10 +120,13 @@ def scan_file(path: str, historical_max: dt.date) -> list[dict]:
     return out
 
 
-def iter_files(roots: list[str], allow: set[str]):
+def iter_files(roots: list[str], allow: set[str]) -> tuple[list[str], list[str]]:
+    """(검사할 파일들, allow 로 제외된 파일들)을 돌려준다."""
+    keep: list[str] = []
+    skipped: list[str] = []
     for root in roots:
         if os.path.isfile(root):
-            yield root
+            (skipped if os.path.abspath(root) in allow else keep).append(root)
             continue
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
@@ -131,9 +134,8 @@ def iter_files(roots: list[str], allow: set[str]):
                 if os.path.splitext(fn)[1].lower() not in CODE_EXT:
                     continue
                 p = os.path.join(dirpath, fn)
-                if os.path.abspath(p) in allow:
-                    continue
-                yield p
+                (skipped if os.path.abspath(p) in allow else keep).append(p)
+    return keep, skipped
 
 
 def main() -> int:
@@ -155,9 +157,10 @@ def main() -> int:
         historical_max = dt.date.today() - dt.timedelta(days=args.window)
 
     allow = {os.path.abspath(p) for p in args.allow_file}
+    candidates, skipped = iter_files(args.roots, allow)
     violations: list[dict] = []
     scanned = 0
-    for p in iter_files(args.roots, allow):
+    for p in candidates:
         if not args.all_files and not is_test_path(p):
             continue
         scanned += 1
@@ -167,13 +170,15 @@ def main() -> int:
         print(json.dumps(dict(historical_max=historical_max.isoformat(),
                               far_future=FAR_FUTURE.isoformat(),
                               scanned_files=scanned,
+                              skipped_files=len(skipped),
                               violations=violations), ensure_ascii=False, indent=2))
     else:
         for v in violations:
             print(f"[E] DAT001 {v['file']}:{v['line']}: 가까운 미래 날짜 {v['date']} "
                   f"({v['kind']}: {v['text']}) — historical(<= {historical_max}) 또는 "
                   f"far-future(>= {FAR_FUTURE}) 로 바꿔라")
-        print(f"\n검사 {scanned}파일 · 위반 {len(violations)}건 "
+        skip_note = f", allow 제외 {len(skipped)}파일" if skipped else ""
+        print(f"\n검사 {scanned}파일{skip_note} · 위반 {len(violations)}건 "
               f"(허용: <= {historical_max} 또는 >= {FAR_FUTURE})")
     return 1 if violations else 0
 
