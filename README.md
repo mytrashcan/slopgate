@@ -41,7 +41,10 @@ gates/            실행되는 검사 (본체)
   skill_lint.py     스킬 frontmatter·참조 파일 실존·인덱스 예산·본문 크기
   memory_budget.py  상시 메모리 예산·장문 항목 이관 후보
   cron_lint.py      크론 프롬프트 길이 한계·스크립트 경로 실존·게이트 없는 무인 실행
-  run_all.sh        전체 실행 + 요약
+  date_bomb.py      테스트 픽스처의 '가까운 미래' 날짜 리터럴 (지나면 CI가 조용히 깨진다)
+  run_all.sh        전체 실행 + 요약 (+ --self-test, --repos)
+tests/
+  test_gates.py     게이트 자체 테스트 — 일부러 위반을 만들어 잡히는지 확인 (39 체크)
 docs/
   00-talk-notes.md     강연 주장 정리 (타임스탬프별) + 가져올 것/버릴 것
   01-model.md          코드 레포 → Hermes 대응 모델 (5계층)
@@ -59,8 +62,10 @@ templates/
 ## 실행
 
 ```bash
-bash gates/run_all.sh          # 전체
-python3 gates/skill_lint.py    # 개별
+bash gates/run_all.sh                    # 전체 (~/.hermes 위생)
+bash gates/run_all.sh --self-test        # 게이트 자체 테스트 포함
+bash gates/run_all.sh --repos ~/Documents/contest-mcp   # 날짜 폭탄 포함
+python3 gates/skill_lint.py              # 개별
 ```
 
 기본 대상은 `~/.hermes`다. 다른 경로를 검사하려면 `--skills-dir`, `--memories-dir`, `--jobs`를 준다.

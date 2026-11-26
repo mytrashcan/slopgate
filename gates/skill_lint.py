@@ -88,14 +88,16 @@ def main() -> int:
             findings.append(dict(sev="W", id="SKL011", file=rel,
                                  msg=f"SKILL.md {len(text)}자 (분할 후보)"))
 
-        # 스킬 디렉터리 기준 상대 경로만 검사한다. `~/.hermes/scripts/x.sh` 같은
-        # 외부 경로는 백틱 안에 절대/홈 경로로 쓰이므로 여기서 걸리지 않는다.
+        # `references/`·`templates/`·`assets/` 는 스킬 로컬 규약이라 디렉터리가 없어도
+        # '자기 것을 가리킨다'고 본다 → 디렉터리 부재도 위반으로 잡는다.
+        # `scripts/` 만 예외: 프로젝트 저장소의 스크립트를 가리키는 서술이 흔해서,
+        # 스킬이 자기 `scripts/` 를 갖고 있을 때만 검사한다.
         for ref in sorted(set(REL_LINK.findall(text))):
             if any(c in ref for c in "*<>"):
                 continue  # glob/플레이스홀더 표기는 대상 아님
             group = ref.split("/", 1)[0]
-            if not (p.parent / group).is_dir():
-                continue  # 스킬이 그 디렉터리를 안 갖고 있으면 다른 저장소 경로 언급
+            if group == "scripts" and not (p.parent / group).is_dir():
+                continue
             if not (p.parent / ref).exists():
                 findings.append(dict(sev="E", id="SKL003", file=rel, msg=f"참조 파일 없음: {ref}"))
 

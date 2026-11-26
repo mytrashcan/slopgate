@@ -1,0 +1,30 @@
+name: gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  self-test:
+    name: 게이트 자체 테스트
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: 게이트 유닛 테스트
+        run: python tests/test_gates.py
+
+  date-bomb:
+    name: 날짜 폭탄 검사 (이 레포)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: 이 레포의 테스트 픽스처
+        run: python gates/date_bomb.py . --since 2026-07-31
