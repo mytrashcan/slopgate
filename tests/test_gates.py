@@ -191,6 +191,26 @@ def test_cron_lint(tmp: str) -> None:
     code4, _ = run_gate("cron_lint.py", ["--jobs", os.path.join(tmp, "nope.json")])
     check("jobs.json 없으면 exit 2", code4 == 2, f"exit={code4}")
 
+    # --- CRN011 실효 프롬프트: 첨부 스킬 본문도 프롬프트 비용이다
+    skroot = os.path.join(tmp, "skills")
+    write(os.path.join(skroot, "big", "SKILL.md"), "x" * 45000)
+    write(os.path.join(skroot, "small", "SKILL.md"), "x" * 300)
+    eff = os.path.join(tmp, "jobs-eff.json")
+    write(eff, json.dumps(dict(jobs=[
+        job(id="heavy", name="heavy", prompt="x" * 3000, monitor_script="present.py",
+            skills=["big"]),
+        job(id="light", name="light", prompt="x" * 3000, monitor_script="present.py",
+            skills=["small"]),
+        job(id="ghost", name="ghost", prompt="x" * 300, monitor_script="present.py",
+            skills=["missing-skill"]),
+    ])))
+    code5, out5 = run_gate("cron_lint.py", ["--jobs", eff, "--scripts-dir", sdir,
+                                            "--skills-dir", skroot])
+    check("첨부 스킬 본문을 합산해 경고한다", "CRN011 heavy" in out5, out5[:600])
+    check("본문이 작으면 경고 없음", "CRN011 light" not in out5, out5[:600])
+    check("없는 첨부 스킬은 따로 잡는다", "CRN012 ghost" in out5, out5[:600])
+    check("CRN011/012 는 경고라 exit 0", code5 == 0, f"exit={code5}")
+
 
 # ------------------------------------------------------------------ date_bomb
 def test_date_bomb(tmp: str) -> None:

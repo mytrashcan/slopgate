@@ -20,12 +20,27 @@ from pathlib import Path
 JOBS = Path.home() / ".hermes" / "cron" / "jobs.json"
 SCRIPTS = Path.home() / ".hermes" / "scripts"
 PROMPT_UPDATE_LIMIT = 9500     # 이보다 길면 cronjob_manage(update)가 실패한다
+EFFECTIVE_PROMPT_LIMIT = 40000  # 프롬프트 + 첨부 스킬 본문. 회차마다 그대로 토큰이 된다
+
+
+def skill_body_chars(skills_root: Path, name: str) -> int | None:
+    """스킬 이름 → SKILL.md 본문 문자수. 없으면 None.
+
+    첨부 스킬은 **본문 전체가 프롬프트에 들어간다**. 이걸 세지 않으면 회차 비용을 못 본다.
+    """
+    for p in skills_root.rglob(f"{name}/SKILL.md"):
+        try:
+            return len(p.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            return None
+    return None
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--jobs", default=str(JOBS))
     ap.add_argument("--scripts-dir", default=str(SCRIPTS))
+    ap.add_argument("--skills-dir", default=str(Path.home() / ".hermes" / "skills"))
     ap.add_argument("--allow-unattended-agent", action="store_true",
                     help="게이트 없는 에이전트 크론 경고를 끈다")
     args = ap.parse_args()
@@ -37,6 +52,7 @@ def main() -> int:
     raw = json.loads(jp.read_text(encoding="utf-8"))
     jobs = raw.get("jobs", raw) if isinstance(raw, dict) else raw
     sdir = Path(os.path.expanduser(args.scripts_dir))
+    skroot = Path(os.path.expanduser(args.skills_dir))
 
     errors, warns, enabled = 0, 0, 0
     for j in jobs:
@@ -53,6 +69,23 @@ def main() -> int:
             if f and not (sdir / f).exists():
                 print(f"[E] CRN002 {name}: {key}={f} 파일 없음")
                 errors += 1
+        # CRN011 실효 프롬프트: 프롬프트 + 첨부 스킬 본문. 회차마다 그대로 토큰이 된다.
+        attached = j.get("skills") or []
+        eff, unknown = plen, []
+        for s in attached:
+            n = skill_body_chars(skroot, s) if skroot.exists() else None
+            if n is None:
+                unknown.append(s)
+            else:
+                eff += n
+        if attached and eff > EFFECTIVE_PROMPT_LIMIT:
+            detail = f"프롬프트 {plen:,} + 첨부 {len(attached) - len(unknown)}개"
+            print(f"[W] CRN011 {name}: 실효 프롬프트 {eff:,}자 > {EFFECTIVE_PROMPT_LIMIT:,}자 "
+                  f"({detail}) — 판단에 기여하는 스킬만 남겨라")
+            warns += 1
+        if unknown:
+            print(f"[W] CRN012 {name}: 첨부 스킬 본문을 못 찾음 {unknown}")
+            warns += 1
         if not j.get("no_agent") and j.get("enabled") and plen == 0:
             print(f"[E] CRN003 {name}: 에이전트 크론인데 프롬프트가 비어 있음")
             errors += 1
