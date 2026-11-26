@@ -244,6 +244,59 @@ def test_date_bomb(tmp: str) -> None:
     check("--allow-file 로 제외", code_c == 0, f"exit={code_c} {out_c[:200]}")
 
 
+# ------------------------------------------------------------ runtime_check
+def test_runtime_check(tmp: str) -> None:
+    print("runtime_check")
+    import datetime as _dt
+
+    now = _dt.datetime(2026, 11, 26, 12, 0, tzinfo=_dt.timezone.utc)
+
+    def job(**kw):
+        base = dict(id="x", name="x", enabled=True, no_agent=True, prompt="p",
+                    last_status="ok", failure_streak=0, state="scheduled",
+                    next_run_at=(now + _dt.timedelta(minutes=5)).isoformat(),
+                    last_run_at=(now - _dt.timedelta(minutes=5)).isoformat(),
+                    schedule=dict(kind="interval", minutes=5))
+        base.update(kw)
+        return base
+
+    def run(payload, now_iso):
+        path = os.path.join(tmp, f"rt-{abs(hash(json.dumps(payload, default=str)))}.json")
+        write(path, json.dumps(dict(jobs=payload), default=str))
+        return run_gate("runtime_check.py", ["--jobs", path, "--now", now_iso])
+
+    iso = now.isoformat()
+
+    code, out = run([job(id="ok", name="ok")], iso)
+    check("정상 작업은 exit 0", code == 0, out[:300])
+
+    code2, out2 = run([job(id="f2", name="f2", failure_streak=2,
+                           last_status="error", last_error="boom")], iso)
+    check("연속 실패를 잡는다", code2 == 1 and "RT001 f2" in out2, out2[:300])
+
+    code3, out3 = run([job(id="f1", name="f1", failure_streak=1, last_status="error",
+                           last_error="once")], iso)
+    check("단발 실패는 경고만", code3 == 0 and "RT002 f1" in out3, out3[:300])
+
+    code4, out4 = run([job(id="stall", name="stall",
+                           next_run_at=(now - _dt.timedelta(hours=68)).isoformat())], iso)
+    check("스케줄러 정지를 잡는다", code4 == 1 and "RT003 stall" in out4, out4[:300])
+
+    code5, out5 = run([job(id="dv", name="dv", last_delivery_error="403")], iso)
+    check("배달 실패를 잡는다", code5 == 1 and "RT004 dv" in out5, out5[:300])
+
+    code6, out6 = run([job(id="old", name="old",
+                           last_run_at=(now - _dt.timedelta(hours=2)).isoformat())], iso)
+    check("주기 대비 지연을 경고한다", code6 == 0 and "RT005 old" in out6, out6[:300])
+
+    code7, out7 = run([job(id="off", name="off", enabled=False, failure_streak=9,
+                           last_status="error")], iso)
+    check("비활성 작업은 검사하지 않는다", code7 == 0 and "off" not in out7, out7[:300])
+
+    code8, _ = run_gate("runtime_check.py", ["--jobs", os.path.join(tmp, "nope.json")])
+    check("jobs.json 없으면 exit 2", code8 == 2, f"exit={code8}")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="slopgate-tests-")
     try:
@@ -251,6 +304,7 @@ def main() -> int:
         test_memory_budget(tmp)
         test_cron_lint(tmp)
         test_date_bomb(tmp)
+        test_runtime_check(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
