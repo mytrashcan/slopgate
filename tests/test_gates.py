@@ -92,6 +92,28 @@ def test_skill_lint(tmp: str) -> None:
     code4, out4 = run_gate("skill_lint.py", ["--skills-dir", d, "--include-archive"])
     check("--include-archive 면 보관 스킬도 검사", "old/SKILL.md" in out4, out4[:300])
 
+    # 인덱스 비용은 프롬프트에 실제로 들어가는 60자 클립 기준이어야 한다.
+    d2 = os.path.join(tmp, "skills-index")
+    long_desc = "Use when testing the clip. " + "padding " * 40
+    write(os.path.join(d2, "long", "SKILL.md"),
+          f"---\nname: long\ndescription: {long_desc}\n---\nbody\n")
+    write(os.path.join(d2, "short", "SKILL.md"),
+          "---\nname: short\ndescription: Use when short.\n---\nbody\n")
+    c_json, o_json = run_gate("skill_lint.py", ["--skills-dir", d2, "--json"])
+    import json as _json
+    s = _json.loads(o_json)["summary"]
+    check("원본 설명은 길다", s["raw_desc_chars"] > 300, str(s))
+    check("인덱스는 60자 클립 기준", s["index_chars"] < 200, str(s))
+
+    # 멀티라인(>- 접기) 설명도 온전히 읽어야 인덱스 크기가 맞다.
+    d3 = os.path.join(tmp, "skills-multi")
+    write(os.path.join(d3, "multi", "SKILL.md"),
+          "---\nname: multi\ndescription: >-\n  Use when the description is folded across\n"
+          "  several lines and must still be measured whole.\n---\nbody\n")
+    c3, o3 = run_gate("skill_lint.py", ["--skills-dir", d3, "--json"])
+    s3 = _json.loads(o3)["summary"]
+    check("멀티라인 설명을 온전히 센다", s3["raw_desc_chars"] > 60, str(s3))
+
 
 # ------------------------------------------------------------- memory_budget
 def test_memory_budget(tmp: str) -> None:

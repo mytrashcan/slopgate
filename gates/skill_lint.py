@@ -33,18 +33,36 @@ FM = re.compile(r"\A---\r?\n(.*?)\r?\n---", re.S)
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """frontmatter 를 dict 로. YAML(`>-` 접기 블록 포함)을 우선 쓰고, 없으면 줄 단위로 떨어진다.
+
+    766개 스킬이 `description: >-` 형태의 여러 줄 설명을 쓴다. 줄 단위 파서는 첫 줄만 읽어서
+    인덱스 크기를 실제보다 작게 계산한다(실측: 118,877 vs 실제 295,194). 게이트가 비용을
+    과소평가하면 예산 결정이 틀어지므로 YAML 을 먼저 시도한다.
+    """
     m = FM.match(text)
     if not m:
         return {}, text
-    fm, body = {}, text[m.end():]
+    body = text[m.end():]
+    try:
+        import yaml  # noqa: PLC0415
+        loaded = yaml.safe_load(m.group(1))
+        if isinstance(loaded, dict):
+            return {str(k): "" if v is None else str(v) for k, v in loaded.items()}, body
+    except Exception:
+        pass
+    fm: dict[str, str] = {}
     for line in m.group(1).splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if ":" not in line:
+        if not line.strip() or line.lstrip().startswith("#") or ":" not in line:
             continue
         k, v = line.split(":", 1)
         fm[k.strip()] = v.strip().strip('"').strip("'")
     return fm, body
+
+
+# Hermes 는 시스템 프롬프트 인덱스에서 설명을 60자로 자른다(agent/skill_utils.SKILL_PROMPT_DESC_LIMIT).
+# 즉 60자를 넘는 부분은 매 세션 비용에 포함되지 않는다. 비용 지표는 '잘린 길이'로 계산해야 맞다.
+PROMPT_DESC_LIMIT = 60
+TRIGGER_CUE = re.compile(r"\b(use when|use for|whenever|when you|when an? |when the |use to|for tasks?)\b", re.I)
 
 
 def main() -> int:
@@ -66,7 +84,9 @@ def main() -> int:
     if not args.include_archive:
         paths = [p for p in paths if ".archive" not in p.relative_to(root).parts]
     findings: list[dict] = []
-    index_chars = 0
+    index_chars = 0     # 시스템 프롬프트에 실제로 들어가는 크기(설명 60자 클립 반영)
+    raw_desc_chars = 0  # 원본 설명 총량 (참고용)
+    no_trigger: list[str] = []  # 60자 클립에서 트리거가 사라지는 스킬
 
     for p in paths:
         rel = str(p.relative_to(root))
@@ -79,7 +99,16 @@ def main() -> int:
         if not desc:
             findings.append(dict(sev="E", id="SKL002", file=rel, msg="frontmatter description 없음"))
 
-        index_chars += len(name) + len(desc) + 6
+        # 인덱스에서 보이는 앞 60자에 "언제 쓰는지"가 없으면, 그 스킬은 목록에서 선택되지 않는다.
+        # 889개 스킬이 60자를 넘는데, 그중 대부분은 트리거 문구가 잘려 나간 뒤에 있다(실측 869건).
+        head = desc[:PROMPT_DESC_LIMIT]
+        if len(desc) > PROMPT_DESC_LIMIT and not TRIGGER_CUE.search(head):
+            no_trigger.append(rel)
+
+        # 인덱스 비용은 실제로 프롬프트에 들어가는 '잘린' 길이로 센다.
+        prompt_desc = desc if len(desc) <= PROMPT_DESC_LIMIT else desc[:PROMPT_DESC_LIMIT - 3] + "..."
+        index_chars += len(name) + len(prompt_desc) + 6
+        raw_desc_chars += len(desc)
 
         if len(desc) > DESC_WARN_CHARS:
             findings.append(dict(sev="W", id="SKL010", file=rel,
@@ -101,6 +130,10 @@ def main() -> int:
             if not (p.parent / ref).exists():
                 findings.append(dict(sev="E", id="SKL003", file=rel, msg=f"참조 파일 없음: {ref}"))
 
+    if no_trigger:
+        findings.append(dict(sev="W", id="SKL021", file="(index)",
+                             msg=f"{len(no_trigger)}개 스킬의 설명이 60자에서 잘려 '언제 쓰는지'가 "
+                                 f"인덱스에서 사라진다 (예: {', '.join(no_trigger[:3])})"))
     if index_chars > args.index_budget:
         findings.append(dict(sev="W", id="SKL020", file="(index)",
                              msg=f"스킬 인덱스 {index_chars}자 > 예산 {args.index_budget}자"))
@@ -108,15 +141,24 @@ def main() -> int:
     errors = [f for f in findings if f["sev"] == "E"]
     warns = [f for f in findings if f["sev"] == "W"]
     summary = dict(skills=len(paths), index_chars=index_chars, index_budget=args.index_budget,
+                   raw_desc_chars=raw_desc_chars, prompt_desc_limit=PROMPT_DESC_LIMIT,
                    errors=len(errors), warnings=len(warns))
 
     if args.json:
         print(json.dumps(dict(summary=summary, findings=findings), ensure_ascii=False, indent=2))
     else:
+        # 같은 ID 가 수십 줄 쏟아지면 요약이 묻힌다 → ID 별로 5줄까지 보여주고 나머지는 개수로 접는다.
+        seen: dict[str, int] = {}
         for f in findings:
-            print(f"[{f['sev']}] {f['id']} {f['file']}: {f['msg']}")
+            seen[f["id"]] = seen.get(f["id"], 0) + 1
+            if seen[f["id"]] <= 5 or f["sev"] == "E":
+                print(f"[{f['sev']}] {f['id']} {f['file']}: {f['msg']}")
+        for fid, n in seen.items():
+            if n > 5:
+                print(f"[W] {fid} …외 {n - 5}건 (전체 목록은 --json)")
         print(f"\n스킬 {summary['skills']}개 · 인덱스 {index_chars}자 "
-              f"(예산 {args.index_budget}자) · 오류 {len(errors)} · 경고 {len(warns)}")
+              f"(예산 {args.index_budget}자, 설명 {PROMPT_DESC_LIMIT}자 클립 반영; "
+              f"원본 설명 {raw_desc_chars}자) · 오류 {len(errors)} · 경고 {len(warns)}")
 
     failed = bool(errors) or (args.strict and bool(warns))
     return 1 if failed else 0
