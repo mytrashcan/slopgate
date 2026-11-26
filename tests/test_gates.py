@@ -41,6 +41,28 @@ def run_gate(script: str, args: list[str]) -> tuple[int, str]:
     return p.returncode, p.stdout + p.stderr
 
 
+# PyYAML 이 없는 환경(CI 러너·최소 설치)을 재현하는 실행기. 게이트는 yaml 이 있으면 쓰고
+# 없으면 자체 파서로 떨어지는데, 두 경로의 측정값이 달라지면 예산 판정이 환경마다 뒤집힌다.
+NO_YAML_BOOT = textwrap.dedent("""
+    import builtins, runpy, sys
+    _real = builtins.__import__
+    def _blocked(name, *a, **k):
+        if name == "yaml":
+            raise ImportError("yaml blocked for this test")
+        return _real(name, *a, **k)
+    builtins.__import__ = _blocked
+    script, rest = sys.argv[1], sys.argv[2:]
+    sys.argv = [script] + rest
+    runpy.run_path(script, run_name="__main__")
+""")
+
+
+def run_gate_no_yaml(script: str, args: list[str]) -> tuple[int, str]:
+    p = subprocess.run([PY, "-c", NO_YAML_BOOT, os.path.join(GATES, script)] + args,
+                       capture_output=True, text=True)
+    return p.returncode, p.stdout + p.stderr
+
+
 def write(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
@@ -113,6 +135,29 @@ def test_skill_lint(tmp: str) -> None:
     c3, o3 = run_gate("skill_lint.py", ["--skills-dir", d3, "--json"])
     s3 = _json.loads(o3)["summary"]
     check("멀티라인 설명을 온전히 센다", s3["raw_desc_chars"] > 60, str(s3))
+
+    # PyYAML 이 없는 환경(CI 러너)에서도 같은 값이 나와야 한다. fallback 파서가 `>-` 를
+    # 값으로 읽으면 설명이 2자로 잡혀 인덱스 비용이 99% 과소평가된다(실측 2자 vs 89자).
+    c4, o4 = run_gate_no_yaml("skill_lint.py", ["--skills-dir", d3, "--json"])
+    s4 = _json.loads(o4)["summary"]
+    check("yaml 없이도 멀티라인 설명을 센다", s4["raw_desc_chars"] == s3["raw_desc_chars"],
+          f"yaml={s3['raw_desc_chars']} no-yaml={s4['raw_desc_chars']}")
+
+    # 이어지는 들여쓴 줄(평문 접기)과 여러 줄 인용 문자열도 같은 값이어야 한다.
+    d4 = os.path.join(tmp, "skills-fold")
+    write(os.path.join(d4, "plain", "SKILL.md"),
+          "---\nname: plain\ndescription: Build a chain using SHA-256 hashing\n"
+          "  for tamper detection across entries.\n---\nbody\n")
+    write(os.path.join(d4, "quoted", "SKILL.md"),
+          "---\nname: quoted\ndescription: 'This skill covers Aqua Security''s integration\n"
+          "  and keeps the whole sentence.'\n---\nbody\n")
+    c5, o5 = run_gate("skill_lint.py", ["--skills-dir", d4, "--json"])
+    s5 = _json.loads(o5)["summary"]
+    c6, o6 = run_gate_no_yaml("skill_lint.py", ["--skills-dir", d4, "--json"])
+    s6 = _json.loads(o6)["summary"]
+    check("평문 접기·인용 문자열도 yaml 과 같은 길이",
+          abs(s5["raw_desc_chars"] - s6["raw_desc_chars"]) <= 2,
+          f"yaml={s5['raw_desc_chars']} no-yaml={s6['raw_desc_chars']}")
 
 
 # ------------------------------------------------------------- memory_budget

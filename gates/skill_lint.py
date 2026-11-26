@@ -51,12 +51,86 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     except Exception:
         pass
     fm: dict[str, str] = {}
+    key = None            # 들여쓴 뒷줄을 이어받는 키 (블록 스칼라 · 여러 줄 인용 · 평문 접기)
+    buf: list[str] = []
+    quote = None          # 여러 줄에 걸친 인용 문자열의 여는 따옴표
+
+    def flush() -> None:
+        nonlocal key, buf, quote
+        if key is not None:
+            fm[key] = join_block(buf) if quote is None else finish_quoted(" ".join(buf), quote)
+        key, buf, quote = None, [], None
+
     for line in m.group(1).splitlines():
-        if not line.strip() or line.lstrip().startswith("#") or ":" not in line:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        # 앞 키의 값이 이어지는 들여쓴 줄 (블록 스칼라·인용 문자열·평문 접기 모두 같은 규칙).
+        if key is not None and line[:1].isspace():
+            buf.append(line.strip())
+            if quote is not None and buf[-1].endswith(quote):
+                flush()
+            continue
+        flush()
+        if ":" not in line:
             continue
         k, v = line.split(":", 1)
-        fm[k.strip()] = v.strip().strip('"').strip("'")
+        k, v = k.strip(), v.strip()
+        if v in (">-", ">", "|-", "|", ">+", "|+"):
+            # 마커는 값이 아니라 블록 시작 표시다. 본문은 뒤따르는 들여쓴 줄이다.
+            key, buf = k, []
+            continue
+        if v[:1] in ("'", '"'):
+            if closed_quote(v, v[0]):
+                fm[k] = finish_quoted(v, v[0])
+            else:
+                key, quote, buf = k, v[0], [v]
+            continue
+        # 인용 없는 평문도 다음 줄로 접힐 수 있다 — 지금 넣고, 뒷줄이 오면 이어 붙인다.
+        fm[k] = v
+        key, buf = k, [v]
+    flush()
     return fm, body
+
+
+def closed_quote(v: str, q: str) -> bool:
+    """여는 따옴표 뒤에 짝이 되는 닫는 따옴표가 있는가.
+
+    YAML 단일 인용 문자열은 안쪽 따옴표를 `''`(두 번)로 이스케이프하므로, 연속 두 개는
+    닫는 표시가 아니라 이스케이프로 건너뛴다. 이걸 구분하지 않으면 `Aqua Security''s ...`
+    같은 값이 첫 이스케이프에서 "닫혔다"고 오판돼 뒷줄이 잘린다.
+    """
+    i = 1
+    while i < len(v):
+        if v[i] == q:
+            if q == "'" and i + 1 < len(v) and v[i + 1] == q:
+                i += 2           # 이스케이프된 따옴표
+                continue
+            return True
+        i += 1
+    return False
+
+
+def finish_quoted(raw: str, q: str) -> str:
+    """여러 줄 인용 문자열에서 바깥 따옴표를 벗긴다."""
+    s = raw.strip()
+    if s.startswith(q):
+        s = s[1:]
+    if s.endswith(q):
+        s = s[:-1]
+    return s.strip()
+
+
+def join_block(lines: list[str]) -> str:
+    """YAML 폴딩 규칙의 근사: 줄을 공백 하나로 잇고, 빈 줄은 개행으로 남긴다."""
+    out: list[str] = []
+    for ln in lines:
+        if not ln:
+            out.append("\n")
+        elif out and out[-1] != "\n":
+            out.append(" " + ln)
+        else:
+            out.append(ln)
+    return "".join(out).strip()
 
 
 # Hermes 는 시스템 프롬프트 인덱스에서 설명을 60자로 자른다(agent/skill_utils.SKILL_PROMPT_DESC_LIMIT).
