@@ -211,6 +211,29 @@ def test_cron_lint(tmp: str) -> None:
     check("없는 첨부 스킬은 따로 잡는다", "CRN012 ghost" in out5, out5[:600])
     check("CRN011/012 는 경고라 exit 0", code5 == 0, f"exit={code5}")
 
+    # --- CRN013 도구가 꺼진 toolset을 지시하면 호출이 조용히 실패한다
+    write(os.path.join(skroot, "asks", "SKILL.md"),
+          "Use skill_view(name='x') then delegate_task(goal='y').\n")
+    tool = os.path.join(tmp, "jobs-tools.json")
+    write(tool, json.dumps(dict(jobs=[
+        job(id="gap", name="gap", prompt="x" * 100, monitor_script="present.py",
+            skills=["asks"], enabled_toolsets=["terminal", "file"]),
+        job(id="fine", name="fine", prompt="x" * 100, monitor_script="present.py",
+            skills=["asks"], enabled_toolsets=["terminal", "file", "skills", "delegation"]),
+        job(id="open", name="open", prompt="x" * 100, monitor_script="present.py",
+            skills=["asks"], enabled_toolsets=None),
+        job(id="script", name="script", prompt="x" * 100, no_agent=True,
+            script="present.py", enabled_toolsets=["terminal"]),
+    ])))
+    code6, out6 = run_gate("cron_lint.py", ["--jobs", tool, "--scripts-dir", sdir,
+                                            "--skills-dir", skroot])
+    check("꺼진 toolset을 지시하면 오류", "CRN013 gap" in out6 and "toolset 'skills'" in out6, out6[:700])
+    check("delegation 누락도 함께 잡는다", "toolset 'delegation'" in out6, out6[:700])
+    check("toolset이 다 켜져 있으면 통과", "CRN013 fine" not in out6, out6[:700])
+    check("enabled_toolsets 미지정(None)이면 검사 안 함", "CRN013 open" not in out6, out6[:700])
+    check("no_agent 스크립트 크론은 제외", "CRN013 script" not in out6, out6[:700])
+    check("CRN013 은 오류라 exit 1", code6 == 1, f"exit={code6}")
+
 
 # ------------------------------------------------------------------ date_bomb
 def test_date_bomb(tmp: str) -> None:

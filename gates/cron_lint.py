@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -21,6 +22,37 @@ JOBS = Path.home() / ".hermes" / "cron" / "jobs.json"
 SCRIPTS = Path.home() / ".hermes" / "scripts"
 PROMPT_UPDATE_LIMIT = 9500     # 이보다 길면 cronjob_manage(update)가 실패한다
 EFFECTIVE_PROMPT_LIMIT = 40000  # 프롬프트 + 첨부 스킬 본문. 회차마다 그대로 토큰이 된다
+# 도구 이름 -> 그 도구가 사는 toolset 이름. 프롬프트/스킬이 이 도구를 지시하면 toolset이 켜져 있어야 한다.
+TOOL_TOOLSET = {
+    "skill_view": "skills", "skills_list": "skills", "skill_manage": "skills",
+    "delegate_task": "delegation",
+    "web_search": "web", "web_extract": "web",
+    "read_file": "file", "write_file": "file", "patch": "file", "search_files": "file",
+    "terminal": "terminal", "process_manage": "terminal",
+    "execute_code": "code",
+    "memory": "memory",
+}
+
+
+def required_toolsets(*texts: str) -> dict[str, str]:
+    """도구 이름이 지시된 것을 찾아 {toolset: [tools]} 로. 코드블록·산문 모두 본다.
+
+    실제 사고: 리뷰 크론의 `enabled_toolsets`가 ["terminal","file"]이라 `skill_view`가
+    아예 없었는데, 런북은 `skill_view(name='hermaguard')`를 지시하고 있었다. 도구가 없으면
+    호출은 조용히 실패하고 모델은 "스킬을 읽었다"고 착각한다. 설정 검사로는 안 잡힌다.
+    """
+    found: dict[str, list[str]] = {}
+    for name, toolset in TOOL_TOOLSET.items():
+        # `skill_view(` 또는 `skill_view (name=` 형태를 찾는다. 단어 경계로 오탐을 줄인다.
+        if re.search(rf"\b{re.escape(name)}\s*\(", "\n".join(texts)):
+            found.setdefault(toolset, []).append(name)
+    return {k: v for k, v in found.items()}
+
+
+def _skill_path(skills_root: Path, name: str) -> Path | None:
+    for p in skills_root.rglob(f"{name}/SKILL.md"):
+        return p
+    return None
 
 
 def skill_body_chars(skills_root: Path, name: str) -> int | None:
@@ -28,12 +60,13 @@ def skill_body_chars(skills_root: Path, name: str) -> int | None:
 
     첨부 스킬은 **본문 전체가 프롬프트에 들어간다**. 이걸 세지 않으면 회차 비용을 못 본다.
     """
-    for p in skills_root.rglob(f"{name}/SKILL.md"):
-        try:
-            return len(p.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            return None
-    return None
+    p = _skill_path(skills_root, name) if skills_root.exists() else None
+    if p is None:
+        return None
+    try:
+        return len(p.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return None
 
 
 def main() -> int:
@@ -86,6 +119,21 @@ def main() -> int:
         if unknown:
             print(f"[W] CRN012 {name}: 첨부 스킬 본문을 못 찾음 {unknown}")
             warns += 1
+
+        # CRN013 도구-toolset 불일치: 프롬프트·첨부 스킬이 지시하는 도구가 꺼져 있으면
+        # 호출이 조용히 실패한다(모델은 성공한 줄 안다). no_agent 크론은 도구가 없으니 제외.
+        if not j.get("no_agent"):
+            allowed = j.get("enabled_toolsets")
+            if allowed is not None:
+                bodies = [j.get("prompt") or ""]
+                bodies += [p.read_text(encoding="utf-8", errors="replace") if (p := _skill_path(skroot, s)) else ""
+                           for s in attached]
+                need = required_toolsets(*bodies)
+                missing = {ts: t for ts, t in need.items() if ts not in allowed}
+                for ts, tools in sorted(missing.items()):
+                    print(f"[E] CRN013 {name}: {', '.join(sorted(tools))} 를 지시하는데 "
+                          f"toolset '{ts}' 가 꺼져 있다 (enabled_toolsets={allowed}) — 호출이 조용히 실패한다")
+                    errors += 1
         if not j.get("no_agent") and j.get("enabled") and plen == 0:
             print(f"[E] CRN003 {name}: 에이전트 크론인데 프롬프트가 비어 있음")
             errors += 1
