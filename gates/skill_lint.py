@@ -51,78 +51,105 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     except Exception:
         pass
     fm: dict[str, str] = {}
-    key = None            # 들여쓴 뒷줄을 이어받는 키 (블록 스칼라 · 여러 줄 인용 · 평문 접기)
+    key = None            # 들여쓴 뒷줄을 이어받는 키
+    mode = None           # "block"(>·|) · "plain"(접히는 평문) · "quoted"(여러 줄 인용)
     buf: list[str] = []
     quote = None          # 여러 줄에 걸친 인용 문자열의 여는 따옴표
 
     def flush() -> None:
-        nonlocal key, buf, quote
+        nonlocal key, mode, buf, quote
         if key is not None:
-            fm[key] = join_block(buf) if quote is None else finish_quoted(" ".join(buf), quote)
-        key, buf, quote = None, [], None
+            folded = fold_lines(buf)
+            if mode == "quoted":
+                inner, _ = unquote(folded, quote)
+                fm[key] = inner if inner is not None else folded.lstrip(quote).strip()
+            else:
+                fm[key] = folded
+        key, mode, buf, quote = None, None, [], None
 
     for line in m.group(1).splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
+        stripped = line.strip()
+        if key is not None:
+            if not stripped:
+                buf.append("")          # 빈 줄은 fold_lines 가 개행으로 남긴다
+                continue
+            if line[:1].isspace():
+                # 인용 문자열·블록 스칼라 안의 `#` 는 주석이 아니라 데이터다.
+                if mode == "plain" and stripped.startswith("#"):
+                    continue            # 평문 스칼라는 `#` 로 시작하는 줄을 값으로 가질 수 없다
+                buf.append(stripped)
+                if mode == "quoted":
+                    inner, _ = unquote(fold_lines(buf), quote)
+                    if inner is not None:
+                        flush()
+                continue
+            flush()                     # 들여쓰기가 끝났다 = 앞 값 종료
+        if not stripped or stripped.startswith("#"):
             continue
-        # 앞 키의 값이 이어지는 들여쓴 줄 (블록 스칼라·인용 문자열·평문 접기 모두 같은 규칙).
-        if key is not None and line[:1].isspace():
-            buf.append(line.strip())
-            if quote is not None and buf[-1].endswith(quote):
-                flush()
-            continue
-        flush()
         if ":" not in line:
             continue
         k, v = line.split(":", 1)
         k, v = k.strip(), v.strip()
-        if v in (">-", ">", "|-", "|", ">+", "|+"):
-            # 마커는 값이 아니라 블록 시작 표시다. 본문은 뒤따르는 들여쓴 줄이다.
-            key, buf = k, []
+        if is_block_marker(v):
+            # 마커(`>-`, `|2-`, `>-  # note`)는 값이 아니라 블록 시작 표시다.
+            key, mode, buf = k, "block", []
             continue
-        if v[:1] in ("'", '"'):
-            if closed_quote(v, v[0]):
-                fm[k] = finish_quoted(v, v[0])
+        if v[:1] in ("'", '\"'):
+            inner, _ = unquote(v, v[0])
+            if inner is not None:
+                fm[k] = inner
             else:
-                key, quote, buf = k, v[0], [v]
+                key, mode, quote, buf = k, "quoted", v[0], [v]
             continue
         # 인용 없는 평문도 다음 줄로 접힐 수 있다 — 지금 넣고, 뒷줄이 오면 이어 붙인다.
         fm[k] = v
-        key, buf = k, [v]
+        key, mode, buf = k, "plain", [v]
     flush()
     return fm, body
 
 
-def closed_quote(v: str, q: str) -> bool:
-    """여는 따옴표 뒤에 짝이 되는 닫는 따옴표가 있는가.
+# 블록 스칼라 마커: `>`, `|-`, `>2-`, `|+` 등. 뒤에 주석이 붙을 수 있다.
+BLOCK_MARKER = re.compile(r"^[>|](?:[+-]?\d*|\d+[+-]?)$")
 
-    YAML 단일 인용 문자열은 안쪽 따옴표를 `''`(두 번)로 이스케이프하므로, 연속 두 개는
-    닫는 표시가 아니라 이스케이프로 건너뛴다. 이걸 구분하지 않으면 `Aqua Security''s ...`
-    같은 값이 첫 이스케이프에서 "닫혔다"고 오판돼 뒷줄이 잘린다.
+
+def is_block_marker(v: str) -> bool:
+    """`>`, `|-`, `>2-`, `>-   # note` 처럼 블록 스칼라를 시작하는 표시인가."""
+    return bool(BLOCK_MARKER.match(v.split("#", 1)[0].strip()))
+
+
+DQ_ESCAPE = {"n": "\n", "t": "\t", "0": "\0", "/": "/"}
+
+
+def unquote(v: str, q: str) -> tuple:
+    """여는 따옴표로 시작하는 값 → (내용, 닫는 따옴표 뒤 나머지). 미종료면 (None, "").
+
+    YAML 인용 규칙을 지켜야 한다. 단일 인용은 안쪽 따옴표를 `''` 로, 이중 인용은 `\\"` 로
+    이스케이프한다. 이걸 모르면 `Aqua Security''s`, 이스케이프된 따옴표가 든 값이 첫
+    이스케이프에서 "닫혔다"고 오판돼 뒷줄이 잘린다.
     """
     i = 1
     while i < len(v):
-        if v[i] == q:
+        c = v[i]
+        if q == '"' and c == "\\":
+            i += 2
+            continue
+        if c == q:
             if q == "'" and i + 1 < len(v) and v[i + 1] == q:
-                i += 2           # 이스케이프된 따옴표
+                i += 2
                 continue
-            return True
+            inner = v[1:i]
+            if q == "'":
+                inner = inner.replace("''", "'")
+            else:
+                inner = re.sub(r"\\(.)", lambda mm: DQ_ESCAPE.get(mm.group(1), mm.group(1)), inner)
+            return inner, v[i + 1:]
         i += 1
-    return False
+    return None, ""
 
 
-def finish_quoted(raw: str, q: str) -> str:
-    """여러 줄 인용 문자열에서 바깥 따옴표를 벗긴다."""
-    s = raw.strip()
-    if s.startswith(q):
-        s = s[1:]
-    if s.endswith(q):
-        s = s[:-1]
-    return s.strip()
-
-
-def join_block(lines: list[str]) -> str:
+def fold_lines(lines: list) -> str:
     """YAML 폴딩 규칙의 근사: 줄을 공백 하나로 잇고, 빈 줄은 개행으로 남긴다."""
-    out: list[str] = []
+    out: list = []
     for ln in lines:
         if not ln:
             out.append("\n")

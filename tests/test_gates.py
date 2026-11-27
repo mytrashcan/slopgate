@@ -159,6 +159,26 @@ def test_skill_lint(tmp: str) -> None:
           abs(s5["raw_desc_chars"] - s6["raw_desc_chars"]) <= 2,
           f"yaml={s5['raw_desc_chars']} no-yaml={s6['raw_desc_chars']}")
 
+    # 인용 스칼라의 이스케이프·블록 마커 변형·인용 안의 `#` 도 같은 값이어야 한다.
+    # 여기서 어긋나면 설명이 임의 지점에서 잘려 인덱스 비용이 조용히 틀어진다.
+    d5 = os.path.join(tmp, "skills-quirk")
+    write(os.path.join(d5, "dq-escape", "SKILL.md"),
+          '---\nname: dq-escape\ndescription: "line one \\"q\\"\n'
+          '  line two"\n---\nbody\n')
+    write(os.path.join(d5, "marker-indent", "SKILL.md"),
+          "---\nname: marker-indent\ndescription: >2-   # folded\n"
+          "  indented text here\n  more of it\n---\nbody\n")
+    write(os.path.join(d5, "hash-in-quote", "SKILL.md"),
+          "---\nname: hash-in-quote\ndescription: 'Use when x\n"
+          "  # data not comment\n  tail here'\n---\nbody\n")
+    c7, o7 = run_gate("skill_lint.py", ["--skills-dir", d5, "--json"])
+    s7 = _json.loads(o7)["summary"]
+    c8, o8 = run_gate_no_yaml("skill_lint.py", ["--skills-dir", d5, "--json"])
+    s8 = _json.loads(o8)["summary"]
+    check("이스케이프·마커 변형·인용 내 # 도 yaml 과 일치",
+          s7["raw_desc_chars"] == s8["raw_desc_chars"],
+          f"yaml={s7['raw_desc_chars']} no-yaml={s8['raw_desc_chars']}")
+
 
 # ------------------------------------------------------------- memory_budget
 def test_memory_budget(tmp: str) -> None:
