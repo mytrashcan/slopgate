@@ -173,6 +173,8 @@ def test_cron_lint(tmp: str) -> None:
     check("없는 스크립트를 잡는다", "CRN002 nofile" in out, out[:500])
     check("빈 프롬프트를 잡는다", "CRN003 empty" in out, out[:500])
     check("게이트 없는 무인 실행은 경고", "CRN010 nogate" in out, out[:500])
+    check("script 로 수집하는 무인 실행은 경고하지 않는다",
+          "CRN010 ok" not in out and "CRN010" in out, out[:500])
     check("비활성 작업도 검사한다(재활성화 시 고칠 수 없는 프롬프트라서)", 
           "CRN001 disabled" in out, out[:500])
     check("비활성 작업은 CRN010(무인 실행) 경고에서 제외", "CRN010 disabled" not in out, out[:500])
