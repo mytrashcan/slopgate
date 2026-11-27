@@ -9,6 +9,7 @@
 |---|---|---|---|---|
 | SKL001 | skill_lint | frontmatter `name` 없음 | 스킬이 인덱스에 이름 없이 노출되면 선택 불가 | 통과 |
 | SKL002 | skill_lint | frontmatter `description` 없음 | 설명이 없으면 어떤 상황에 쓸지 판단 불가 | 통과 |
+| SKL004 | skill_lint | 다른 스킬을 이름으로 부르는데 그 스킬이 `.archive/`에 있음 (경고) | 아카이브로 옮기면 호출자가 조용히 '스킬 없음'을 만난다. SKL003(파일 참조)과 다른 축 | 이동 후 9건→0건 |
 | SKL003 | skill_lint | `references/`·`scripts/`·`templates/`·`assets/` 백틱 참조가 실존하지 않음 | 에이전트가 스킬을 믿고 헛걸음하고 즉석 우회한다 | **12건 실패** |
 | SKL010 | skill_lint | description 120자 초과 | 인덱스 비용. 단 `skill_manage(create)`의 60자 제한과는 다른 축 | 62건 경고 |
 | SKL011 | skill_lint | SKILL.md 40,000자 초과 | 한 번 로드에 드는 컨텍스트. 분할 후보 | 8건 경고 |

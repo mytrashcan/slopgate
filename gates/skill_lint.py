@@ -202,6 +202,7 @@ def main() -> int:
     index_chars = 0     # 시스템 프롬프트에 실제로 들어가는 크기(설명 60자 클립 반영)
     raw_desc_chars = 0  # 원본 설명 총량 (참고용)
     no_trigger: list[str] = []  # 60자 클립에서 트리거가 사라지는 스킬
+    loaded: set[str] = set()    # 이번 실행에서 활성인 스킬 이름 (SKL004 교차검사용)
 
     for p in paths:
         rel = str(p.relative_to(root))
@@ -209,6 +210,8 @@ def main() -> int:
         fm, _ = parse_frontmatter(text)
         name, desc = fm.get("name", ""), fm.get("description", "")
 
+        if name:
+            loaded.add(name)
         if not name:
             findings.append(dict(sev="E", id="SKL001", file=rel, msg="frontmatter name 없음"))
         if not desc:
@@ -244,6 +247,24 @@ def main() -> int:
                 continue
             if not (p.parent / ref).exists():
                 findings.append(dict(sev="E", id="SKL003", file=rel, msg=f"참조 파일 없음: {ref}"))
+
+    # SKL004 다른 스킬을 이름으로 부르는데 그 이름이 활성 집합에 없다.
+    # 아카이브로 옮기면 호출자가 조용히 '스킬 없음'을 만난다 — 파일 참조(SKL003)와 다른 축이다.
+    # 판정은 '아카이브 디렉터리에 그 이름이 있는가'로만 한다 — 아카이브 목록이 곧 허용 집합이라
+    # 오탐이 구조적으로 불가능하다. 하이픈 개수 같은 휴리스틱을 넣으면 두 단어짜리 스킬을 놓친다
+    # (실제로 retired-security-skill 이 그렇게 빠져 테스트가 실패했다).
+    if not args.include_archive:
+        names_re = re.compile(r"`([a-z0-9][a-z0-9-]{6,})`")
+        for p in paths:
+            rel = str(p.relative_to(root))
+            text = p.read_text(encoding="utf-8", errors="replace")
+            for cand in sorted(set(names_re.findall(text))):
+                if cand in loaded:
+                    continue
+                # 아카이브에 있는 이름만 보고한다(원래 없던 이름은 오탐이 많다).
+                if (root / ".archive" / cand).exists():
+                    findings.append(dict(sev="W", id="SKL004", file=rel,
+                                         msg=f"아카이브된 스킬을 참조: {cand}"))
 
     if no_trigger:
         findings.append(dict(sev="W", id="SKL021", file="(index)",

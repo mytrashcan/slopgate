@@ -38,6 +38,24 @@
 | 게이트 경고 | 831 | 160 |
 | `.archive/` | 129개 | 832개 |
 
+**이동 직후 발견 — SKL004를 새로 만들어 잡았다**
+
+아카이브 703개가 다른 스킬들의 본문에서 **이름으로 호출되고 있었다**. 그대로 두면 다음 에이전트가
+"이 스킬을 읽어라"는 지시를 받고 빈손으로 돌아온다. 그래서 `SKL004`(아카이브된 스킬 참조)를 만들고
+전수 조사했다(초기 16건).
+
+처리 원칙은 **사용 기록**이었다:
+- `use_count > 0` → **복구** 10건. `nara-bid-predictor-engineering`(43회), `pcie-dma-firmware`(22회),
+  `a2a-inter-agent-operations`(102회), `security-audit`(32회), `youtube-content`(6회),
+  `systematic-debugging`(5회), `requesting-code-review`(4회), `test-driven-development`(3회),
+  `architecture-diagram`(2회), `multi-agent-parallel-workflow`.
+- 사용 0 → 아카이브 유지, 그 이름을 부르던 문장을 산문으로 바꿈(6곳). "없는 스킬을 쓰라"는
+  지시는 헛수고를 만든다.
+
+복구하면서 드러난 참조 결함 3건도 고쳤다(`SKL003`가 오류로 잡음): 다른 스킬의 참조 파일을
+자기 경로처럼 적은 문장 1건, 레포 스크립트를 스킬 폴더 경로로 적은 문장 1건, 존재하지 않는
+참조 파일을 목록에 올린 1건.
+
 **건드리지 않은 것**
 - 사용 기록이 있는 팩 스킬 19개 (예: `performing-web-application-penetration-test` 12회 사용)
 - **hub 설치 스킬 78개** — `archive_skill()`이 거부한다(`is_hub_installed`). 제거하려면

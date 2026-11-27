@@ -444,6 +444,29 @@ def test_runtime_check(tmp: str) -> None:
     check("RT006: 상태 파일이 없으면 그냥 통과", code12 == 0, out12[:300])
 
 
+# ---------------------------------------------------------------- skill_lint SKL004
+def test_skill_lint_archived_refs(tmp: str) -> None:
+    print("skill_lint (SKL004 아카이브 참조)")
+    root = os.path.join(tmp, "skl4")
+    os.makedirs(os.path.join(root, ".archive", "retired-security-skill"), exist_ok=True)
+    write(os.path.join(root, ".archive", "retired-security-skill", "SKILL.md"),
+          "---\nname: retired-security-skill\ndescription: old\n---\n")
+    write(os.path.join(root, "live", "SKILL.md"),
+          "---\nname: live\ndescription: Use when testing.\n---\n"
+          "See `retired-security-skill` for details.\nAlso `live` and `not-a-skill-flag`.\n")
+    write(os.path.join(root, "clean", "SKILL.md"),
+          "---\nname: clean\ndescription: Use when testing.\n---\nNo references.\n")
+
+    code, out = run_gate("skill_lint.py", ["--skills-dir", root])
+    check("아카이브된 스킬 이름을 부르면 경고", "SKL004 live/SKILL.md" in out, out[:500])
+    check("활성 스킬은 참조 위반 아님", "SKL004 clean" not in out, out[:500])
+    check("SKL004 는 경고라 exit 0", code == 0, f"exit={code}")
+
+    # --include-archive 로 전체를 검사하면 교차검사는 하지 않는다(아카이브된 것끼리 참조가 정상)
+    code2, out2 = run_gate("skill_lint.py", ["--skills-dir", root, "--include-archive"])
+    check("--include-archive 면 SKL004 를 끈다", "SKL004" not in out2, out2[:300])
+
+
 # ----------------------------------------------------------------- docs_lint
 def test_docs_lint(tmp: str) -> None:
     print("docs_lint")
@@ -491,6 +514,7 @@ def main() -> int:
         test_date_bomb(tmp)
         test_runtime_check(tmp)
         test_docs_lint(tmp)
+        test_skill_lint_archived_refs(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
