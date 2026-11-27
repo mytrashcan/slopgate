@@ -498,8 +498,21 @@ def test_docs_lint(tmp: str) -> None:
     code5, out5 = run_docs("2026-11-26-snapshot.md", "# t\n테스트 54개\n")
     check("스냅샷 문서는 검사하지 않는다", "DOC001" not in out5, out5[:300])
 
-    code6, out6 = run_docs("e.md", "# t\n## 현재 기준선 (2026-11-26)\n- 스킬 970개\n## 다른 절\n- 스킬 970개\n")
+    code6, out6 = run_docs("e.md", "# t\n## 기준선 (2026-11-26)\n- 스킬 970개\n## 다른 절\n- 스킬 970개\n")
     check("날짜 붙은 절 안은 허용", out6.count("DOC001") == 1, out6[:400])
+
+    # DOC002: 제목이 "현재 …(날짜)"면 자기모순이다 — 날짜 면제가 취소되고, 아래 카운터가 다시 잡힌다.
+    # 이 케이스가 없으면 같은 숫자를 다시 박고도 게이트가 조용해진다(실제로 그렇게 놓쳤다).
+    code8, out8 = run_docs("g.md", "# t\n## 현재 기준선 (2026-11-26)\n- 스킬 970개\n")
+    check("'현재'를 주장하며 날짜로 고정하면 DOC002", "DOC002" in out8, out8[:400])
+    check("DOC002 면 그 절의 카운터도 다시 잡힌다", "DOC001" in out8, out8[:400])
+
+    code9, out9 = run_docs("h.md", "# t\n## 과거 기준선 (2026-11-26)\n- 스킬 970개\n")
+    check("과거 시점임을 밝힌 절은 허용", "DOC002" not in out9 and "DOC001" not in out9, out9[:400])
+
+    # 진짜 스냅샷은 '현재'라고 주장하지 않으므로 그대로 면제된다.
+    code10, out10 = run_docs("2026-11-26-snap2.md", "# t\n## 현재 상태\n- 스킬 970개\n")
+    check("스냅샷 문서는 여전히 면제", "DOC001" not in out10 and "DOC002" not in out10, out10[:400])
 
     code7, out7 = run_docs("f.md", "# t\n그냥 문서다\n")
     check("위반 없으면 조용하고 exit 0", "DOC001" not in out7 and code7 == 0, out7[:300])

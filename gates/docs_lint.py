@@ -45,6 +45,13 @@ DATED_HEADING = re.compile(r"^#{1,6}\s.*20\d{2}-\d{2}")
 #         숫자를 지우면 오히려 증거가 사라진다.
 SNAPSHOT_NAME = re.compile(r"20\d{2}-\d{2}")
 
+# "지금 이 값"을 주장하는 제목. 날짜가 붙으면 자기모순이다 — 과거 날짜로 고정해 놓고
+# 제목은 최신이라고 말하는 순간, 그 아래 숫자는 아무도 갱신하지 않는다.
+# 실제로 `## 현재 기준선 (2026-11-26)` 아래에 970개·99,617자가 남아 있었고, DOC001의
+# 날짜 예외가 그 절 전체를 면제해 아무 경고도 나오지 않았다. 문서를 읽는 사람은
+# "현재"라고 믿는다. 그래서 제목이 스스로 모순이면 그 절의 면제를 취소한다.
+CURRENTRY = re.compile(r"현재|현행|최신|as of today", re.I)
+
 
 def is_snapshot(path: Path, lines: list[str]) -> bool:
     """스냅샷 문서인가 (파일명에 날짜, 또는 첫 5줄에 명시 마커).
@@ -70,6 +77,12 @@ def scan(path: Path) -> list[dict]:
     for lineno, line in enumerate(lines, 1):
         if line.startswith("#"):
             dated_section = bool(DATED_HEADING.match(line))
+            # 제목이 "현재 …(날짜)"면 자기모순이다: 날짜 면제를 취소하고 DOC002로 알린다.
+            if dated_section and CURRENTRY.search(line):
+                out.append(dict(file=str(path), line=lineno, kind="현재 주장 + 날짜",
+                                text=line.strip()[:60], snippet=line.strip()[:110],
+                                doc="DOC002"))
+                dated_section = False
         if DATED.search(line) or dated_section:
             continue
         if line.lstrip().startswith("<!--"):
@@ -112,6 +125,12 @@ def main() -> int:
         print(json.dumps(dict(files=len(targets), findings=findings), ensure_ascii=False, indent=2))
     else:
         for f in findings:
+            doc_id = f.get("doc", "DOC001")
+            if doc_id == "DOC002":
+                print(f"[W] DOC002 {f['file']}:{f['line']} 제목이 `{f['text']}` 라고 '현재'를 주장하면서 "
+                      f"날짜로 고정돼 있다 — 숫자는 아무도 갱신하지 않는다. 제목에서 날짜를 빼거나 "
+                      f"(그러면 아래 카운터는 DOC001이 잡는다), 스냅샷으로 표시하라(`docs-lint: snapshot`).")
+                continue
             print(f"[W] DOC001 {f['file']}:{f['line']} {f['kind']} `{f['text']}` 가 박혀 있다 "
                   f"— 실행 출력을 인용하라: {f['snippet']}")
         print(f"\n문서 {len(targets)}개 · 경고 {len(findings)}")
