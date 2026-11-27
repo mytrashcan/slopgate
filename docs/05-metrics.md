@@ -68,7 +68,8 @@ git log --since='60 days ago' --grep='^Revert' --oneline | wc -l
 **정의**: 세션 시작 시 주입되는 스킬 인덱스 문자수.
 **측정**: `python3 gates/skill_lint.py --json`의 `summary.index_chars`.
 
-60자 클립 기준 99,617자(≈25k 토큰/세션). 목표: 예산 확정 후 그 이하 유지 (Q2).
+**현재: 24,659자 (게이트 근사) / 24,012자 (실제 `clip_skill_description`)** — 예산 60,000 이내.
+초기 118,731자 → 60자 클립 99,617자 → Q8 실행 후 24,659자. 활성 스킬 970 → 267개.
 
 ## 6. 오탐률
 
