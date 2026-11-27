@@ -24,6 +24,7 @@ from pathlib import Path
 
 DEFAULT_SKILLS_DIR = Path.home() / ".hermes" / "skills"
 # 스킬 인덱스(이름+설명)는 매 세션 컨텍스트에 주입된다. 예산은 토큰 비용 상한이다.
+parser_path = "none"   # "yaml" | "fallback" — 마지막 frontmatter 파싱에 쓰인 경로
 DEFAULT_INDEX_BUDGET = 60000      # characters
 DESC_WARN_CHARS = 120             # 파일 기준 권고치 (skill_manage API의 60자 제한과 다름)
 BODY_WARN_CHARS = 40000           # 한 스킬이 이보다 크면 분할 후보
@@ -43,13 +44,16 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     if not m:
         return {}, text
     body = text[m.end():]
+    global parser_path
     try:
         import yaml  # noqa: PLC0415
         loaded = yaml.safe_load(m.group(1))
         if isinstance(loaded, dict):
+            parser_path = "yaml"
             return {str(k): "" if v is None else str(v) for k, v in loaded.items()}, body
     except Exception:
         pass
+    parser_path = "fallback"
     fm: dict[str, str] = {}
     key = None            # 들여쓴 뒷줄을 이어받는 키
     mode = None           # "block"(>·|) · "plain"(접히는 평문) · "quoted"(여러 줄 인용)
@@ -101,11 +105,21 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
             else:
                 key, mode, quote, buf = k, "quoted", v[0], [v]
             continue
+        if v in NULL_TOKENS:
+            # YAML 의 null(`~`, `null`, `NULL`)은 빈 값이다. fallback 이 문자열로 읽으면
+            # 같은 파일이 yaml 경로에서는 SKL002(설명 없음)로 실패하고 CI(무 yaml)에서는
+            # 통과하는 판정 뒤집힘이 생긴다.
+            fm[k] = ""
+            continue
         # 인용 없는 평문도 다음 줄로 접힐 수 있다 — 지금 넣고, 뒷줄이 오면 이어 붙인다.
         fm[k] = v
         key, mode, buf = k, "plain", [v]
     flush()
     return fm, body
+
+
+# YAML 이 null 로 읽는 스칼라. frontmatter 파서 두 경로가 같은 결론을 내야 한다.
+NULL_TOKENS = frozenset({"~", "null", "Null", "NULL"})
 
 
 # 블록 스칼라 마커: `>`, `|-`, `>2-`, `|+` 등. 뒤에 주석이 붙을 수 있다.
@@ -243,7 +257,10 @@ def main() -> int:
     warns = [f for f in findings if f["sev"] == "W"]
     summary = dict(skills=len(paths), index_chars=index_chars, index_budget=args.index_budget,
                    raw_desc_chars=raw_desc_chars, prompt_desc_limit=PROMPT_DESC_LIMIT,
-                   errors=len(errors), warnings=len(warns))
+                   errors=len(errors), warnings=len(warns),
+                   # 어느 파서가 이 수치를 냈는지 결과에 남긴다. 두 경로가 조용히 갈라지면
+                   # 같은 트리가 환경마다 다른 판정을 내는데, 출력만 보면 구분할 수 없다.
+                   parser=parser_path)
 
     if args.json:
         print(json.dumps(dict(summary=summary, findings=findings), ensure_ascii=False, indent=2))
@@ -259,7 +276,8 @@ def main() -> int:
                 print(f"[W] {fid} …외 {n - 5}건 (전체 목록은 --json)")
         print(f"\n스킬 {summary['skills']}개 · 인덱스 {index_chars}자 "
               f"(예산 {args.index_budget}자, 설명 {PROMPT_DESC_LIMIT}자 클립 반영; "
-              f"원본 설명 {raw_desc_chars}자) · 오류 {len(errors)} · 경고 {len(warns)}")
+              f"원본 설명 {raw_desc_chars}자) · 오류 {len(errors)} · 경고 {len(warns)}"
+              f" · 파서 {parser_path}")
 
     failed = bool(errors) or (args.strict and bool(warns))
     return 1 if failed else 0

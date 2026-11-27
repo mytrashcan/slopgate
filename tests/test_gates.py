@@ -179,6 +179,24 @@ def test_skill_lint(tmp: str) -> None:
           s7["raw_desc_chars"] == s8["raw_desc_chars"],
           f"yaml={s7['raw_desc_chars']} no-yaml={s8['raw_desc_chars']}")
 
+    # YAML 의 null(`~`·`null`)은 빈 값이다. fallback 이 문자열로 읽으면 같은 파일이
+    # yaml 경로에서 SKL002(설명 없음)로 실패하고 CI(무 yaml)에서는 통과한다 — 판정 뒤집힘.
+    d6 = os.path.join(tmp, "skills-null")
+    write(os.path.join(d6, "tilde", "SKILL.md"), "---\nname: tilde\ndescription: ~\n---\nbody\n")
+    c9, o9 = run_gate("skill_lint.py", ["--skills-dir", d6, "--json"])
+    c10, o10 = run_gate_no_yaml("skill_lint.py", ["--skills-dir", d6, "--json"])
+    ids9 = {(f["file"], f["id"]) for f in _json.loads(o9)["findings"]}
+    ids10 = {(f["file"], f["id"]) for f in _json.loads(o10)["findings"]}
+    check("null 설명은 두 경로 모두 SKL002 로 잡는다", ids9 == ids10,
+          f"yaml={sorted(ids9)} no-yaml={sorted(ids10)}")
+
+    # 결과에 어느 파서가 수치를 냈는지 남아야, 두 경로가 갈라졌을 때 출력만으로 알 수 있다.
+    check("결과에 파서 경로를 남긴다",
+          _json.loads(o9)["summary"].get("parser") == "yaml"
+          and _json.loads(o10)["summary"].get("parser") == "fallback",
+          f"yaml={_json.loads(o9)['summary'].get('parser')} "
+          f"no-yaml={_json.loads(o10)['summary'].get('parser')}")
+
 
 # ------------------------------------------------------------- memory_budget
 def test_memory_budget(tmp: str) -> None:
