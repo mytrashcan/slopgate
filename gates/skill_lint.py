@@ -24,6 +24,7 @@ from pathlib import Path
 
 DEFAULT_SKILLS_DIR = Path.home() / ".hermes" / "skills"
 # 스킬 인덱스(이름+설명)는 매 세션 컨텍스트에 주입된다. 예산은 토큰 비용 상한이다.
+parser_path = "none"   # "yaml" | "fallback" — 마지막 frontmatter 파싱에 쓰인 경로
 DEFAULT_INDEX_BUDGET = 60000      # characters
 DESC_WARN_CHARS = 120             # 파일 기준 권고치 (skill_manage API의 60자 제한과 다름)
 BODY_WARN_CHARS = 40000           # 한 스킬이 이보다 크면 분할 후보
@@ -43,20 +44,134 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     if not m:
         return {}, text
     body = text[m.end():]
+    global parser_path
     try:
         import yaml  # noqa: PLC0415
         loaded = yaml.safe_load(m.group(1))
         if isinstance(loaded, dict):
+            parser_path = "yaml"
             return {str(k): "" if v is None else str(v) for k, v in loaded.items()}, body
     except Exception:
         pass
+    parser_path = "fallback"
     fm: dict[str, str] = {}
+    key = None            # 들여쓴 뒷줄을 이어받는 키
+    mode = None           # "block"(>·|) · "plain"(접히는 평문) · "quoted"(여러 줄 인용)
+    buf: list[str] = []
+    quote = None          # 여러 줄에 걸친 인용 문자열의 여는 따옴표
+
+    def flush() -> None:
+        nonlocal key, mode, buf, quote
+        if key is not None:
+            folded = fold_lines(buf)
+            if mode == "quoted":
+                inner, _ = unquote(folded, quote)
+                fm[key] = inner if inner is not None else folded.lstrip(quote).strip()
+            else:
+                fm[key] = folded
+        key, mode, buf, quote = None, None, [], None
+
     for line in m.group(1).splitlines():
-        if not line.strip() or line.lstrip().startswith("#") or ":" not in line:
+        stripped = line.strip()
+        if key is not None:
+            if not stripped:
+                buf.append("")          # 빈 줄은 fold_lines 가 개행으로 남긴다
+                continue
+            if line[:1].isspace():
+                # 인용 문자열·블록 스칼라 안의 `#` 는 주석이 아니라 데이터다.
+                if mode == "plain" and stripped.startswith("#"):
+                    continue            # 평문 스칼라는 `#` 로 시작하는 줄을 값으로 가질 수 없다
+                buf.append(stripped)
+                if mode == "quoted":
+                    inner, _ = unquote(fold_lines(buf), quote)
+                    if inner is not None:
+                        flush()
+                continue
+            flush()                     # 들여쓰기가 끝났다 = 앞 값 종료
+        if not stripped or stripped.startswith("#"):
+            continue
+        if ":" not in line:
             continue
         k, v = line.split(":", 1)
-        fm[k.strip()] = v.strip().strip('"').strip("'")
+        k, v = k.strip(), v.strip()
+        if is_block_marker(v):
+            # 마커(`>-`, `|2-`, `>-  # note`)는 값이 아니라 블록 시작 표시다.
+            key, mode, buf = k, "block", []
+            continue
+        if v[:1] in ("'", '\"'):
+            inner, _ = unquote(v, v[0])
+            if inner is not None:
+                fm[k] = inner
+            else:
+                key, mode, quote, buf = k, "quoted", v[0], [v]
+            continue
+        if v in NULL_TOKENS:
+            # YAML 의 null(`~`, `null`, `NULL`)은 빈 값이다. fallback 이 문자열로 읽으면
+            # 같은 파일이 yaml 경로에서는 SKL002(설명 없음)로 실패하고 CI(무 yaml)에서는
+            # 통과하는 판정 뒤집힘이 생긴다.
+            fm[k] = ""
+            continue
+        # 인용 없는 평문도 다음 줄로 접힐 수 있다 — 지금 넣고, 뒷줄이 오면 이어 붙인다.
+        fm[k] = v
+        key, mode, buf = k, "plain", [v]
+    flush()
     return fm, body
+
+
+# YAML 이 null 로 읽는 스칼라. frontmatter 파서 두 경로가 같은 결론을 내야 한다.
+NULL_TOKENS = frozenset({"~", "null", "Null", "NULL"})
+
+
+# 블록 스칼라 마커: `>`, `|-`, `>2-`, `|+` 등. 뒤에 주석이 붙을 수 있다.
+BLOCK_MARKER = re.compile(r"^[>|](?:[+-]?\d*|\d+[+-]?)$")
+
+
+def is_block_marker(v: str) -> bool:
+    """`>`, `|-`, `>2-`, `>-   # note` 처럼 블록 스칼라를 시작하는 표시인가."""
+    return bool(BLOCK_MARKER.match(v.split("#", 1)[0].strip()))
+
+
+DQ_ESCAPE = {"n": "\n", "t": "\t", "0": "\0", "/": "/"}
+
+
+def unquote(v: str, q: str) -> tuple:
+    """여는 따옴표로 시작하는 값 → (내용, 닫는 따옴표 뒤 나머지). 미종료면 (None, "").
+
+    YAML 인용 규칙을 지켜야 한다. 단일 인용은 안쪽 따옴표를 `''` 로, 이중 인용은 `\\"` 로
+    이스케이프한다. 이걸 모르면 `Aqua Security''s`, 이스케이프된 따옴표가 든 값이 첫
+    이스케이프에서 "닫혔다"고 오판돼 뒷줄이 잘린다.
+    """
+    i = 1
+    while i < len(v):
+        c = v[i]
+        if q == '"' and c == "\\":
+            i += 2
+            continue
+        if c == q:
+            if q == "'" and i + 1 < len(v) and v[i + 1] == q:
+                i += 2
+                continue
+            inner = v[1:i]
+            if q == "'":
+                inner = inner.replace("''", "'")
+            else:
+                inner = re.sub(r"\\(.)", lambda mm: DQ_ESCAPE.get(mm.group(1), mm.group(1)), inner)
+            return inner, v[i + 1:]
+        i += 1
+    return None, ""
+
+
+def fold_lines(lines: list) -> str:
+    """YAML 폴딩 규칙의 근사: 줄을 공백 하나로 잇고, 빈 줄은 개행으로 남긴다."""
+    out: list = []
+    for ln in lines:
+        if not ln:
+            out.append("\n")
+        elif out and out[-1] != "\n":
+            out.append(" " + ln)
+        else:
+            out.append(ln)
+    return "".join(out).strip()
 
 
 # Hermes 는 시스템 프롬프트 인덱스에서 설명을 60자로 자른다(agent/skill_utils.SKILL_PROMPT_DESC_LIMIT).
@@ -142,7 +257,10 @@ def main() -> int:
     warns = [f for f in findings if f["sev"] == "W"]
     summary = dict(skills=len(paths), index_chars=index_chars, index_budget=args.index_budget,
                    raw_desc_chars=raw_desc_chars, prompt_desc_limit=PROMPT_DESC_LIMIT,
-                   errors=len(errors), warnings=len(warns))
+                   errors=len(errors), warnings=len(warns),
+                   # 어느 파서가 이 수치를 냈는지 결과에 남긴다. 두 경로가 조용히 갈라지면
+                   # 같은 트리가 환경마다 다른 판정을 내는데, 출력만 보면 구분할 수 없다.
+                   parser=parser_path)
 
     if args.json:
         print(json.dumps(dict(summary=summary, findings=findings), ensure_ascii=False, indent=2))
@@ -158,7 +276,8 @@ def main() -> int:
                 print(f"[W] {fid} …외 {n - 5}건 (전체 목록은 --json)")
         print(f"\n스킬 {summary['skills']}개 · 인덱스 {index_chars}자 "
               f"(예산 {args.index_budget}자, 설명 {PROMPT_DESC_LIMIT}자 클립 반영; "
-              f"원본 설명 {raw_desc_chars}자) · 오류 {len(errors)} · 경고 {len(warns)}")
+              f"원본 설명 {raw_desc_chars}자) · 오류 {len(errors)} · 경고 {len(warns)}"
+              f" · 파서 {parser_path}")
 
     failed = bool(errors) or (args.strict and bool(warns))
     return 1 if failed else 0

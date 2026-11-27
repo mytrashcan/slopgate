@@ -41,6 +41,28 @@ def run_gate(script: str, args: list[str]) -> tuple[int, str]:
     return p.returncode, p.stdout + p.stderr
 
 
+# PyYAML 이 없는 환경(CI 러너·최소 설치)을 재현하는 실행기. 게이트는 yaml 이 있으면 쓰고
+# 없으면 자체 파서로 떨어지는데, 두 경로의 측정값이 달라지면 예산 판정이 환경마다 뒤집힌다.
+NO_YAML_BOOT = textwrap.dedent("""
+    import builtins, runpy, sys
+    _real = builtins.__import__
+    def _blocked(name, *a, **k):
+        if name == "yaml":
+            raise ImportError("yaml blocked for this test")
+        return _real(name, *a, **k)
+    builtins.__import__ = _blocked
+    script, rest = sys.argv[1], sys.argv[2:]
+    sys.argv = [script] + rest
+    runpy.run_path(script, run_name="__main__")
+""")
+
+
+def run_gate_no_yaml(script: str, args: list[str]) -> tuple[int, str]:
+    p = subprocess.run([PY, "-c", NO_YAML_BOOT, os.path.join(GATES, script)] + args,
+                       capture_output=True, text=True)
+    return p.returncode, p.stdout + p.stderr
+
+
 def write(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
@@ -113,6 +135,67 @@ def test_skill_lint(tmp: str) -> None:
     c3, o3 = run_gate("skill_lint.py", ["--skills-dir", d3, "--json"])
     s3 = _json.loads(o3)["summary"]
     check("멀티라인 설명을 온전히 센다", s3["raw_desc_chars"] > 60, str(s3))
+
+    # PyYAML 이 없는 환경(CI 러너)에서도 같은 값이 나와야 한다. fallback 파서가 `>-` 를
+    # 값으로 읽으면 설명이 2자로 잡혀 인덱스 비용이 99% 과소평가된다(실측 2자 vs 89자).
+    c4, o4 = run_gate_no_yaml("skill_lint.py", ["--skills-dir", d3, "--json"])
+    s4 = _json.loads(o4)["summary"]
+    check("yaml 없이도 멀티라인 설명을 센다", s4["raw_desc_chars"] == s3["raw_desc_chars"],
+          f"yaml={s3['raw_desc_chars']} no-yaml={s4['raw_desc_chars']}")
+
+    # 이어지는 들여쓴 줄(평문 접기)과 여러 줄 인용 문자열도 같은 값이어야 한다.
+    d4 = os.path.join(tmp, "skills-fold")
+    write(os.path.join(d4, "plain", "SKILL.md"),
+          "---\nname: plain\ndescription: Build a chain using SHA-256 hashing\n"
+          "  for tamper detection across entries.\n---\nbody\n")
+    write(os.path.join(d4, "quoted", "SKILL.md"),
+          "---\nname: quoted\ndescription: 'This skill covers Aqua Security''s integration\n"
+          "  and keeps the whole sentence.'\n---\nbody\n")
+    c5, o5 = run_gate("skill_lint.py", ["--skills-dir", d4, "--json"])
+    s5 = _json.loads(o5)["summary"]
+    c6, o6 = run_gate_no_yaml("skill_lint.py", ["--skills-dir", d4, "--json"])
+    s6 = _json.loads(o6)["summary"]
+    check("평문 접기·인용 문자열도 yaml 과 같은 길이",
+          s6["raw_desc_chars"] == s5["raw_desc_chars"],
+          f"yaml={s5['raw_desc_chars']} no-yaml={s6['raw_desc_chars']}")
+
+    # 인용 스칼라의 이스케이프·블록 마커 변형·인용 안의 `#` 도 같은 값이어야 한다.
+    # 여기서 어긋나면 설명이 임의 지점에서 잘려 인덱스 비용이 조용히 틀어진다.
+    d5 = os.path.join(tmp, "skills-quirk")
+    write(os.path.join(d5, "dq-escape", "SKILL.md"),
+          '---\nname: dq-escape\ndescription: "line one \\"q\\"\n'
+          '  line two"\n---\nbody\n')
+    write(os.path.join(d5, "marker-indent", "SKILL.md"),
+          "---\nname: marker-indent\ndescription: >2-   # folded\n"
+          "  indented text here\n  more of it\n---\nbody\n")
+    write(os.path.join(d5, "hash-in-quote", "SKILL.md"),
+          "---\nname: hash-in-quote\ndescription: 'Use when x\n"
+          "  # data not comment\n  tail here'\n---\nbody\n")
+    c7, o7 = run_gate("skill_lint.py", ["--skills-dir", d5, "--json"])
+    s7 = _json.loads(o7)["summary"]
+    c8, o8 = run_gate_no_yaml("skill_lint.py", ["--skills-dir", d5, "--json"])
+    s8 = _json.loads(o8)["summary"]
+    check("이스케이프·마커 변형·인용 내 # 도 yaml 과 일치",
+          s7["raw_desc_chars"] == s8["raw_desc_chars"],
+          f"yaml={s7['raw_desc_chars']} no-yaml={s8['raw_desc_chars']}")
+
+    # YAML 의 null(`~`·`null`)은 빈 값이다. fallback 이 문자열로 읽으면 같은 파일이
+    # yaml 경로에서 SKL002(설명 없음)로 실패하고 CI(무 yaml)에서는 통과한다 — 판정 뒤집힘.
+    d6 = os.path.join(tmp, "skills-null")
+    write(os.path.join(d6, "tilde", "SKILL.md"), "---\nname: tilde\ndescription: ~\n---\nbody\n")
+    c9, o9 = run_gate("skill_lint.py", ["--skills-dir", d6, "--json"])
+    c10, o10 = run_gate_no_yaml("skill_lint.py", ["--skills-dir", d6, "--json"])
+    ids9 = {(f["file"], f["id"]) for f in _json.loads(o9)["findings"]}
+    ids10 = {(f["file"], f["id"]) for f in _json.loads(o10)["findings"]}
+    check("null 설명은 두 경로 모두 SKL002 로 잡는다", ids9 == ids10,
+          f"yaml={sorted(ids9)} no-yaml={sorted(ids10)}")
+
+    # 결과에 어느 파서가 수치를 냈는지 남아야, 두 경로가 갈라졌을 때 출력만으로 알 수 있다.
+    check("결과에 파서 경로를 남긴다",
+          _json.loads(o9)["summary"].get("parser") == "yaml"
+          and _json.loads(o10)["summary"].get("parser") == "fallback",
+          f"yaml={_json.loads(o9)['summary'].get('parser')} "
+          f"no-yaml={_json.loads(o10)['summary'].get('parser')}")
 
 
 # ------------------------------------------------------------- memory_budget
