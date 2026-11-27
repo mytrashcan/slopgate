@@ -25,6 +25,7 @@ from pathlib import Path
 
 JOBS = Path.home() / ".hermes" / "cron" / "jobs.json"
 STALL_GRACE = timedelta(minutes=10)   # next_run_at 이 이만큼 지났는데 안 돌았으면 스케줄러 정지
+SWEEPER_STATE = Path.home() / ".hermes" / "scripts" / ".sweeper-gate-state.json"
 
 
 def parse_ts(value) -> datetime | None:
@@ -41,6 +42,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--jobs", default=str(JOBS))
     ap.add_argument("--now", help="기준 시각 (ISO8601). 테스트용")
+    ap.add_argument("--gate-state", default=None,
+                    help="모니터 게이트 상태 파일 (RT006). 기본값은 SWEEPER_STATE")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
@@ -50,6 +53,7 @@ def main() -> int:
         return 2
     raw = json.loads(jp.read_text(encoding="utf-8"))
     jobs = raw.get("jobs", raw) if isinstance(raw, dict) else raw
+    gate_state = Path(os.path.expanduser(args.gate_state or SWEEPER_STATE))
     now = parse_ts(args.now) if args.now else datetime.now(timezone.utc)
     if now is None:
         print("runtime_check: --now 형식 오류", file=sys.stderr)
@@ -89,6 +93,17 @@ def main() -> int:
         if j.get("last_delivery_error"):
             findings.append(dict(sev="E", id="RT004", job=name,
                                  msg=f"배달 실패: {str(j['last_delivery_error'])[:90]}"))
+
+        # RT006 게이트가 조회에 실패한 채 침묵: 후보 없음과 구분되지 않는다
+        health = gate_state if name and "sweeper" in str(name).lower() else None
+        if health and health.exists():
+            try:
+                streak = int(json.loads(health.read_text()).get("fetch_fail_streak") or 0)
+            except (OSError, ValueError):
+                streak = 0
+            if streak >= 3:
+                findings.append(dict(sev="E", id="RT006", job=name,
+                                     msg=f"게이트가 {streak}틱 연속 소스 조회 실패 — '후보 없음'이 아니라 '확인 못 함'이다"))
 
         # RT005 주기 대비 지연: 인터벌 작업이 기대의 2배 넘게 안 돌았다
         if interval and last_run and j.get("state") == "scheduled":

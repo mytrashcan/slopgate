@@ -339,6 +339,25 @@ def test_runtime_check(tmp: str) -> None:
     code8, _ = run_gate("runtime_check.py", ["--jobs", os.path.join(tmp, "nope.json")])
     check("jobs.json 없으면 exit 2", code8 == 2, f"exit={code8}")
 
+    # RT006 게이트 조회 실패가 '후보 없음'으로 위장되는 것
+    gp = os.path.join(tmp, "gate-state.json")
+    gjobs = os.path.join(tmp, "g9.json")
+    write(gjobs, json.dumps(dict(jobs=[job(id="sw", name="Hermes-sweeper PR 자동 리뷰 봇")])))
+
+    write(gp, json.dumps({"fetch_fail_streak": 5}))
+    code10, out10 = run_gate("runtime_check.py", ["--jobs", gjobs, "--now", iso,
+                                                 "--gate-state", gp])
+    check("RT006: 게이트가 조회 실패 중이면 오류", "RT006" in out10 and code10 == 1, out10[:400])
+
+    write(gp, json.dumps({"fetch_fail_streak": 0}))
+    code11, out11 = run_gate("runtime_check.py", ["--jobs", gjobs, "--now", iso,
+                                                 "--gate-state", gp])
+    check("RT006: 회복되면 조용하다", "RT006" not in out11 and code11 == 0, out11[:400])
+
+    code12, out12 = run_gate("runtime_check.py", ["--jobs", gjobs, "--now", iso,
+                                                 "--gate-state", os.path.join(tmp, "none.json")])
+    check("RT006: 상태 파일이 없으면 그냥 통과", code12 == 0, out12[:300])
+
 
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="slopgate-tests-")
