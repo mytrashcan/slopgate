@@ -45,7 +45,7 @@ gates/            실행되는 검사 (본체)
   date_bomb.py      테스트 픽스처의 '가까운 미래' 날짜 리터럴 (지나면 CI가 조용히 깨진다)
   run_all.sh        전체 실행 + 요약 (+ --self-test, --repos)
 tests/
-  test_gates.py     게이트 자체 테스트 — 일부러 위반을 만들어 잡히는지 확인 (54 체크)
+  test_gates.py     게이트 자체 테스트 — 일부러 위반을 만들어 잡히는지 확인
 docs/
   00-talk-notes.md     강연 주장 정리 (타임스탬프별) + 가져올 것/버릴 것
   01-model.md          코드 레포 → Hermes 대응 모델 (5계층)

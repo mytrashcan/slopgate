@@ -33,7 +33,7 @@
   - 런북에 "리뷰 첫 줄에 이 증거를 인용하라, `ci=none`이면 실제로 읽거나 실행한 것을 적어라"를 넣었다. 산문 1단락 추가 대신 수집을 스크립트로 옮긴 형태(원칙 5).
   - 검증: `--selftest`에 결정론·CI 집계·pending·ci=none 케이스 추가, 실 PR(Rust-DMA#52)에서 `EVIDENCE|..|ci=10/10|fail=0|files=25|+364/-63|review=NONE|merge=CLEAN` 확인, 2회 실행 동일.
 - [ ] 토큰 분포 측정 시작 — `state.db`의 `session_model_usage`로 작업별 사용량 집계 스크립트
-- [x] 날짜 린트 게이트 추가 — `gates/date_bomb.py` + `tests/test_gates.py`(54 체크) + CI 워크플로우. 오탐 4종(버전 문자열·맨 정수·hex·URL 쿼리) 제거 확인 (2026-11-26)
+- [x] 날짜 린트 게이트 추가 — `gates/date_bomb.py` + `tests/test_gates.py` + CI 워크플로우. 오탐 4종(버전 문자열·맨 정수·hex·URL 쿼리) 제거 확인 (2026-11-26)
 
 완료 조건: 2주 동안 게이트를 건너뛴 PR이 0건. 지표 표에 숫자 2개 이상이 채워짐.
 

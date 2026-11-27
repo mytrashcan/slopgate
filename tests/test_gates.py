@@ -156,7 +156,7 @@ def test_skill_lint(tmp: str) -> None:
     c6, o6 = run_gate_no_yaml("skill_lint.py", ["--skills-dir", d4, "--json"])
     s6 = _json.loads(o6)["summary"]
     check("평문 접기·인용 문자열도 yaml 과 같은 길이",
-          abs(s5["raw_desc_chars"] - s6["raw_desc_chars"]) <= 2,
+          s6["raw_desc_chars"] == s5["raw_desc_chars"],
           f"yaml={s5['raw_desc_chars']} no-yaml={s6['raw_desc_chars']}")
 
     # 인용 스칼라의 이스케이프·블록 마커 변형·인용 안의 `#` 도 같은 값이어야 한다.
