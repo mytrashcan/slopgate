@@ -41,11 +41,12 @@ gates/            실행되는 검사 (본체)
   skill_lint.py     스킬 frontmatter·참조 파일 실존·인덱스 예산·본문 크기
   memory_budget.py  상시 메모리 예산·장문 항목 이관 후보
   cron_lint.py      크론 프롬프트 길이·실효 프롬프트(첨부 스킬 본문 합계)·스크립트 실존·게이트 없는 무인 실행·도구/toolset 불일치
-  runtime_check.py  자동화가 **실제로 돌았는가** — 연속 실패·스케줄러 정지·배달 실패 (실행 기록 기반)
+  runtime_check.py  자동화가 **실제로 돌았는가** — 연속 실패·스케줄러 정지·배달 실패·게이트 조회 실패 (실행 기록 기반)
+  docs_lint.py      문서에 박힌 상승 카운터(체크 수·스킬 개수) 탐지 — 날짜 붙은 실측은 허용
   date_bomb.py      테스트 픽스처의 '가까운 미래' 날짜 리터럴 (지나면 CI가 조용히 깨진다)
   run_all.sh        전체 실행 + 요약 (+ --self-test, --repos)
 tests/
-  test_gates.py     게이트 자체 테스트 — 일부러 위반을 만들어 잡히는지 확인 (60 체크)
+  test_gates.py     게이트 자체 테스트 — 일부러 위반을 만들어 잡히는지 확인
 docs/
   00-talk-notes.md     강연 주장 정리 (타임스탬프별) + 가져올 것/버릴 것
   01-model.md          코드 레포 → Hermes 대응 모델 (5계층)

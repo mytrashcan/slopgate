@@ -30,6 +30,7 @@
 | RT003 | runtime_check | `next_run_at`이 10분 이상 지났는데 실행 없음 | 스케줄러/게이트웨이 정지 | 0건 |
 | RT004 | runtime_check | `last_delivery_error` 존재 | 돌긴 했는데 결과가 사용자에게 안 갔다 | 0건 |
 | RT005 | runtime_check | 인터벌 주기의 2배 넘게 실행 없음 (경고) | 조용한 지연 | 0건 |
+| DOC001 | docs_lint | 문서에 상승하는 카운터(체크 수·스킬 개수·게이트 집계)가 박혀 있음 (경고) | 게이트를 추가할 때마다 반드시 낡는다 — 실측으로 같은 숫자를 다섯 번 고쳤다 | 0건 |
 | RT006 | runtime_check | 모니터 게이트가 3틱 연속 소스 조회 실패 | "후보 없음"과 "확인 못 함"이 구분되지 않는다 — 실측 61틱 | 0건 |
 
 ## 오탐 위험 (중요)
@@ -66,16 +67,16 @@ RT001이 그걸 잡았고, 원인은 판단(메모리 정리·교훈 작성)과 
    - 상태: `~/.hermes/state/slopgate/last.json` (이전 실행의 위반 목록)
    - **침묵 규칙**: 통과하면 아무것도 출력하지 않고, 실패해도 **새 위반이 없으면 침묵**한다. 첫 실행만 전체를 보여준다. 경고 피로를 만들면 게이트가 무시되기 때문.
    - `no_agent` 규약상 **항상 exit 0**으로 끝난다(위반은 stdout으로만). exit != 0 은 "스크립트 고장" 알림이 되어 매일 오탐 알림이 된다.
-2. **CI** (`.github/workflows/gates.yml`) — `tests/test_gates.py`(게이트 자체 테스트 50개)와 이 레포 대상 `date_bomb`.
+2. **CI** (`.github/workflows/gates.yml`) — `tests/test_gates.py`(게이트 자체 테스트)와 이 레포 대상 `date_bomb`.
 
 프로젝트 레포(contest-mcp, OpenStreamGrid 등)의 날짜 부채는 일일 크론에 넣지 않았다. 기존 부채 164건을 매일 알리면 소음이고, 날짜 폭탄의 제자리는 **그 레포의 CI**(PR 시점)다. 필요하면 `slopgate-daily.py --repos <경로>`로 수동 점검한다.
 
 ## 게이트 자체 테스트
 
-게이트가 조용히 고장 나면(정규식 오타 등) 아무것도 잡지 못하는데 겉으로는 "통과"로 보인다. 그래서 `tests/test_gates.py`가 각 게이트에 대해 **일부러 위반을 만들어 잡히는지**와 **오탐 입력이 통과하는지**를 함께 확인한다(39개 체크).
+게이트가 조용히 고장 나면(정규식 오타 등) 아무것도 잡지 못하는데 겉으로는 "통과"로 보인다. 그래서 `tests/test_gates.py`가 각 게이트에 대해 **일부러 위반을 만들어 잡히는지**와 **오탐 입력이 통과하는지**를 함께 확인한다. 체크 개수는 박지 않는다 — 실행 요약(`통과 N/N`)이 유일한 출처다.
 
 ```bash
-/usr/local/bin/python3 tests/test_gates.py     # 통과 39/39
+/usr/local/bin/python3 tests/test_gates.py     # 통과 N/N 요약 출력
 bash gates/run_all.sh --self-test              # 게이트 + 자체 테스트
 ```
 

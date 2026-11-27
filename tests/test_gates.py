@@ -359,6 +359,44 @@ def test_runtime_check(tmp: str) -> None:
     check("RT006: 상태 파일이 없으면 그냥 통과", code12 == 0, out12[:300])
 
 
+# ----------------------------------------------------------------- docs_lint
+def test_docs_lint(tmp: str) -> None:
+    print("docs_lint")
+    d = os.path.join(tmp, "docslint")
+    os.makedirs(d, exist_ok=True)
+
+    def run_docs(name: str, body: str):
+        # 케이스마다 디렉터리를 분리한다 — 같은 디렉터리를 재사용하면 앞 케이스의 위반이 따라온다.
+        dd = os.path.join(d, name.replace(".", "_"))
+        os.makedirs(dd, exist_ok=True)
+        path = os.path.join(dd, name)
+        write(path, body)
+        # --readme 는 없는 경로를 준다: 같은 파일이 docs-dir과 readme로 두 번 세지면
+        # 경고 수 검증이 흔들린다.
+        return run_gate("docs_lint.py", ["--docs-dir", dd, "--readme", os.path.join(dd, "none.md")])
+
+    code, out = run_docs("a.md", "# t\n통과 39/39 이라고 썼다\n")
+    check("통과 수를 박으면 잡는다", "DOC001" in out, out[:300])
+
+    code2, out2 = run_docs("b.md", "# t\n스킬 970개\n")
+    check("스킬 개수를 박으면 잡는다", "DOC001" in out2, out2[:300])
+
+    code3, out3 = run_docs("c.md", "# t\n2026-11-27 실측: 오류 3 · 경고 5\n")
+    check("날짜 붙은 실측은 허용", "DOC001" not in out3, out3[:300])
+
+    code4, out4 = run_docs("d.md", "# t\n주의: 테스트 63개 <!-- docs-lint: fixed -->\n")
+    check("고정 표시가 있으면 허용", "DOC001" not in out4, out4[:300])
+
+    code5, out5 = run_docs("2026-11-26-snapshot.md", "# t\n테스트 54개\n")
+    check("스냅샷 문서는 검사하지 않는다", "DOC001" not in out5, out5[:300])
+
+    code6, out6 = run_docs("e.md", "# t\n## 현재 기준선 (2026-11-26)\n- 스킬 970개\n## 다른 절\n- 스킬 970개\n")
+    check("날짜 붙은 절 안은 허용", out6.count("DOC001") == 1, out6[:400])
+
+    code7, out7 = run_docs("f.md", "# t\n그냥 문서다\n")
+    check("위반 없으면 조용하고 exit 0", "DOC001" not in out7 and code7 == 0, out7[:300])
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="slopgate-tests-")
     try:
@@ -367,6 +405,7 @@ def main() -> int:
         test_cron_lint(tmp)
         test_date_bomb(tmp)
         test_runtime_check(tmp)
+        test_docs_lint(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -18,6 +18,17 @@ jobs:
       - name: 게이트 유닛 테스트
         run: python tests/test_gates.py
 
+  docs-lint:
+    name: 문서 카운터 검사
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: 상승 카운터가 문서에 박혀 있는지
+        run: python gates/docs_lint.py
+
   date-bomb:
     name: 날짜 폭탄 검사 (이 레포)
     runs-on: ubuntu-latest
