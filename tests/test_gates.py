@@ -256,6 +256,8 @@ def test_cron_lint(tmp: str) -> None:
     check("없는 스크립트를 잡는다", "CRN002 nofile" in out, out[:500])
     check("빈 프롬프트를 잡는다", "CRN003 empty" in out, out[:500])
     check("게이트 없는 무인 실행은 경고", "CRN010 nogate" in out, out[:500])
+    check("script 로 수집하는 무인 실행은 경고하지 않는다",
+          "CRN010 ok" not in out and "CRN010" in out, out[:500])
     check("비활성 작업도 검사한다(재활성화 시 고칠 수 없는 프롬프트라서)", 
           "CRN001 disabled" in out, out[:500])
     check("비활성 작업은 CRN010(무인 실행) 경고에서 제외", "CRN010 disabled" not in out, out[:500])
@@ -293,6 +295,29 @@ def test_cron_lint(tmp: str) -> None:
     check("본문이 작으면 경고 없음", "CRN011 light" not in out5, out5[:600])
     check("없는 첨부 스킬은 따로 잡는다", "CRN012 ghost" in out5, out5[:600])
     check("CRN011/012 는 경고라 exit 0", code5 == 0, f"exit={code5}")
+
+    # --- CRN013 도구가 꺼진 toolset을 지시하면 호출이 조용히 실패한다
+    write(os.path.join(skroot, "asks", "SKILL.md"),
+          "Use skill_view(name='x') then delegate_task(goal='y').\n")
+    tool = os.path.join(tmp, "jobs-tools.json")
+    write(tool, json.dumps(dict(jobs=[
+        job(id="gap", name="gap", prompt="x" * 100, monitor_script="present.py",
+            skills=["asks"], enabled_toolsets=["terminal", "file"]),
+        job(id="fine", name="fine", prompt="x" * 100, monitor_script="present.py",
+            skills=["asks"], enabled_toolsets=["terminal", "file", "skills", "delegation"]),
+        job(id="open", name="open", prompt="x" * 100, monitor_script="present.py",
+            skills=["asks"], enabled_toolsets=None),
+        job(id="script", name="script", prompt="x" * 100, no_agent=True,
+            script="present.py", enabled_toolsets=["terminal"]),
+    ])))
+    code6, out6 = run_gate("cron_lint.py", ["--jobs", tool, "--scripts-dir", sdir,
+                                            "--skills-dir", skroot])
+    check("꺼진 toolset을 지시하면 오류", "CRN013 gap" in out6 and "toolset 'skills'" in out6, out6[:700])
+    check("delegation 누락도 함께 잡는다", "toolset 'delegation'" in out6, out6[:700])
+    check("toolset이 다 켜져 있으면 통과", "CRN013 fine" not in out6, out6[:700])
+    check("enabled_toolsets 미지정(None)이면 검사 안 함", "CRN013 open" not in out6, out6[:700])
+    check("no_agent 스크립트 크론은 제외", "CRN013 script" not in out6, out6[:700])
+    check("CRN013 은 오류라 exit 1", code6 == 1, f"exit={code6}")
 
 
 # ------------------------------------------------------------------ date_bomb
@@ -399,6 +424,63 @@ def test_runtime_check(tmp: str) -> None:
     code8, _ = run_gate("runtime_check.py", ["--jobs", os.path.join(tmp, "nope.json")])
     check("jobs.json 없으면 exit 2", code8 == 2, f"exit={code8}")
 
+    # RT006 게이트 조회 실패가 '후보 없음'으로 위장되는 것
+    gp = os.path.join(tmp, "gate-state.json")
+    gjobs = os.path.join(tmp, "g9.json")
+    write(gjobs, json.dumps(dict(jobs=[job(id="sw", name="Hermes-sweeper PR 자동 리뷰 봇")])))
+
+    write(gp, json.dumps({"fetch_fail_streak": 5}))
+    code10, out10 = run_gate("runtime_check.py", ["--jobs", gjobs, "--now", iso,
+                                                 "--gate-state", gp])
+    check("RT006: 게이트가 조회 실패 중이면 오류", "RT006" in out10 and code10 == 1, out10[:400])
+
+    write(gp, json.dumps({"fetch_fail_streak": 0}))
+    code11, out11 = run_gate("runtime_check.py", ["--jobs", gjobs, "--now", iso,
+                                                 "--gate-state", gp])
+    check("RT006: 회복되면 조용하다", "RT006" not in out11 and code11 == 0, out11[:400])
+
+    code12, out12 = run_gate("runtime_check.py", ["--jobs", gjobs, "--now", iso,
+                                                 "--gate-state", os.path.join(tmp, "none.json")])
+    check("RT006: 상태 파일이 없으면 그냥 통과", code12 == 0, out12[:300])
+
+
+# ----------------------------------------------------------------- docs_lint
+def test_docs_lint(tmp: str) -> None:
+    print("docs_lint")
+    d = os.path.join(tmp, "docslint")
+    os.makedirs(d, exist_ok=True)
+
+    def run_docs(name: str, body: str):
+        # 케이스마다 디렉터리를 분리한다 — 같은 디렉터리를 재사용하면 앞 케이스의 위반이 따라온다.
+        dd = os.path.join(d, name.replace(".", "_"))
+        os.makedirs(dd, exist_ok=True)
+        path = os.path.join(dd, name)
+        write(path, body)
+        # --readme 는 없는 경로를 준다: 같은 파일이 docs-dir과 readme로 두 번 세지면
+        # 경고 수 검증이 흔들린다.
+        return run_gate("docs_lint.py", ["--docs-dir", dd, "--readme", os.path.join(dd, "none.md")])
+
+    code, out = run_docs("a.md", "# t\n통과 39/39 이라고 썼다\n")
+    check("통과 수를 박으면 잡는다", "DOC001" in out, out[:300])
+
+    code2, out2 = run_docs("b.md", "# t\n스킬 970개\n")
+    check("스킬 개수를 박으면 잡는다", "DOC001" in out2, out2[:300])
+
+    code3, out3 = run_docs("c.md", "# t\n2026-11-27 실측: 오류 3 · 경고 5\n")
+    check("날짜 붙은 실측은 허용", "DOC001" not in out3, out3[:300])
+
+    code4, out4 = run_docs("d.md", "# t\n주의: 테스트 63개 <!-- docs-lint: fixed -->\n")
+    check("고정 표시가 있으면 허용", "DOC001" not in out4, out4[:300])
+
+    code5, out5 = run_docs("2026-11-26-snapshot.md", "# t\n테스트 54개\n")
+    check("스냅샷 문서는 검사하지 않는다", "DOC001" not in out5, out5[:300])
+
+    code6, out6 = run_docs("e.md", "# t\n## 현재 기준선 (2026-11-26)\n- 스킬 970개\n## 다른 절\n- 스킬 970개\n")
+    check("날짜 붙은 절 안은 허용", out6.count("DOC001") == 1, out6[:400])
+
+    code7, out7 = run_docs("f.md", "# t\n그냥 문서다\n")
+    check("위반 없으면 조용하고 exit 0", "DOC001" not in out7 and code7 == 0, out7[:300])
+
 
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="slopgate-tests-")
@@ -408,6 +490,7 @@ def main() -> int:
         test_cron_lint(tmp)
         test_date_bomb(tmp)
         test_runtime_check(tmp)
+        test_docs_lint(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

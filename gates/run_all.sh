@@ -34,6 +34,7 @@ run "skill_lint"    "$PY" gates/skill_lint.py
 run "memory_budget" "$PY" gates/memory_budget.py
 run "cron_lint"     "$PY" gates/cron_lint.py
 run "runtime_check" "$PY" gates/runtime_check.py
+run "docs_lint"     "$PY" gates/docs_lint.py
 
 if [ ${#repos[@]} -gt 0 ]; then
   run "date_bomb" "$PY" gates/date_bomb.py "${repos[@]}"
