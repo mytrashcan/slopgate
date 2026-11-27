@@ -17,17 +17,22 @@ WHERE last_seen >= strftime('%s','now','-7 day')
 GROUP BY role ORDER BY tok DESC;
 ```
 
-**측정값 (2026-11-25, 최근 7일)**
+**측정값 (2026-11-27 실행, 최근 7일)** — 재현: `python3 scripts/token_report.py --days 7`
 
-| 역할 | 토큰 | 비중 |
+| 역할 | 입력 토큰 | 비중 |
 |---|---|---|
-| main (메인 턴) | 703,004,019 | 97.1% |
-| background_review | 21,140,112 | 2.9% |
-| compression / title / approval | 103k | 0.0% |
-| **합계** | **724,247,040** | 100% |
+| main (메인 턴) | 20,203,751 | 86% |
+| background_review | 3,059,469 | 13% |
+| compression / title / approval | 141,715 | 1% |
+| **합계** | **23,404,935** | 100% |
 
-주의: `cache_read_tokens`가 포함되어 절대값은 실제 비용보다 과대하다. 역할 간 **비율**만 신뢰한다.
-해석: 검증 역할은 3%다. 강연 사례(70%)와 정반대다. 이 숫자가 이 저장소의 존재 이유다.
+주의 1: `cache_read_tokens`(8억)는 캐시 재사용이라 실제 비용 기여가 작다. **입력 토큰 기준 비율**을 본다.
+주의 2: `session_model_usage.last_seen`은 ISO 문자열이 아니라 **epoch 초(float)**다. ISO로 비교하면
+조용히 0건이 나온다(이 스크립트를 처음 만들 때 실제로 그랬다).
+
+해석: 검증 역할(`background_review`)은 13%다. 11-25 기준선에서는 3%였는데, 그사이 리뷰 크론이
+증거 수집(`EVIDENCE`)과 스킬 로딩을 갖추면서 리뷰 1건당 실제로 읽는 양이 늘었다. 강연 사례(70%)와는
+여전히 거리가 있지만 방향은 맞다.
 
 목표: 검증 역할 비중을 측정 가능한 형태로 15% 이상으로 올린다. 올리는 방법은 "리뷰를 더 시킨다"가 아니라
 **게이트·속성 테스트·실행 검증을 자동화해서 검증 자체를 싸게 만드는 것**이다.
@@ -61,9 +66,9 @@ git log --since='60 days ago' --grep='^Revert' --oneline | wc -l
 ## 5. 스킬 인덱스 비용
 
 **정의**: 세션 시작 시 주입되는 스킬 인덱스 문자수.
-**측정**: `python3 gates/skill_lint.py --json | jq '.summary.index_chars'`.
+**측정**: `python3 gates/skill_lint.py --json`의 `summary.index_chars`.
 
-현재 118,731자 (≈30k 토큰/세션). 목표: 예산 확정 후 그 이하 유지 (Q2).
+60자 클립 기준 99,617자(≈25k 토큰/세션). 목표: 예산 확정 후 그 이하 유지 (Q2).
 
 ## 6. 오탐률
 
