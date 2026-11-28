@@ -184,7 +184,10 @@ def fold_lines(lines: list) -> str:
 PROMPT_DESC_LIMIT = 60
 # 코드펜스 시작 줄(``` 또는 ~~~, 앞 공백 허용). SKL023 이 짝을 센다.
 FENCE_OPEN = re.compile(r"^\s*(?:```|~~~)")
-TRIGGER_CUE = re.compile(r"\b(use when|use for|whenever|when you|when an? |when the |use to|for tasks?)\b", re.I)
+# 인덱스 60자 안에 "언제 쓰는지"가 있는지. `Use when` 만 인정하면 `Use before`·`Use on`·
+# `Use after` 로 시작하는 정상 트리거를 놓친다(실측 3건 — 고쳐 놓고도 게이트가 계속 울렸다).
+TRIGGER_CUE = re.compile(
+    r"\b(use (?:when|for|before|after|on|in|during|to)|whenever|when you|when an? |when the |for tasks?)\b", re.I)
 
 # SKL022 — 같은 트리거를 노리는 스킬 쌍.
 #
