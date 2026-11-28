@@ -41,6 +41,10 @@ def main() -> int:
             problems += 1
             continue
         text = p.read_text(encoding="utf-8", errors="replace")
+        # Hermes 는 주입 시 후행 개행을 버린다. 게이트가 그 개행을 세면 파일은 한도 이내인데
+        # "120%"로 실패한다(실측 6/5자). 실제 주입되는 길이로 재야 한다.
+        if text.endswith("\n"):
+            text = text[:-1]
         n = len(text)
         ratio = n / limit if limit else 0
         entries = [e for e in text.split("\n§\n") if e.strip()]

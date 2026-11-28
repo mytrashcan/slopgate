@@ -201,8 +201,11 @@ def main() -> int:
             errors += 1
         # CRN010: 후보 게이트 없이 매 주기 모델을 띄운다. 단 `script`가 수집한 값을 주입하는
         # 구조는 수집이 결정론적이므로 경고하지 않는다(주간 점검: script → 판단만).
-        if (not j.get("no_agent") and j.get("enabled") and not j.get("monitor_script")
-                and not j.get("script") and not args.allow_unattended_agent):
+        # URL monitor 도 조건부 기동이다 — 매 틱 모델을 띄우는 게 아니라 출력이 바뀔 때만 띄운다.
+        has_conditional_gate = bool(j.get("monitor_script") or j.get("script")
+                                    or j.get("monitor") or j.get("monitor_url"))
+        if (not j.get("no_agent") and j.get("enabled") and not has_conditional_gate
+                and not args.allow_unattended_agent):
             print(f"[W] CRN010 {name}: 후보 게이트 없이 매 주기 모델을 띄운다")
             warns += 1
 

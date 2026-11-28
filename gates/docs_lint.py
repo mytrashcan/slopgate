@@ -73,7 +73,14 @@ def scan(path: Path) -> list[dict]:
     if is_snapshot(path, lines):
         return out
     dated_section = False
+    fence = ""   # 코드펜스 안의 헤딩은 제목이 아니다 — 문서 예시를 위반으로 잡으면 게이트가 무시된다
     for lineno, line in enumerate(lines, 1):
+        fm = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if fm:
+            fence = "" if fence else fm.group(1)[0]
+            continue
+        if fence:
+            continue
         setext = False
         if lineno < len(lines) and line.strip() and not line.startswith("#"):
             # Setext 제목: 텍스트 줄 바로 아래 `===` 또는 `---`. `##` 만 보면 이 형태를 놓친다.
