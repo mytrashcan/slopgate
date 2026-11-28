@@ -55,8 +55,14 @@
 - [x] 인덱스 예산 축소 — Q8 실행으로 99,617 → **24,659자**(예산 60,000 이내). 보안 팩 중 미사용 703개를
   `.archive/`로 이동(사용 기록 19개·hub 설치 78개는 유지). SKL004가 잡은 참조 결함으로 10개를 복구해
   현재 **25,505자**·활성 277개. 2026-11-27
-- [ ] description 60/120자 규칙 확정 (Q1) — API 제약과 비용 기준을 분리해 문서화
-- [ ] `.archive/` 822건 처리 — 살릴 것만 복구, 나머지는 삭제 (Q3)
+- [x] description 60/120자 규칙 확정 (Q1) — **결정: (c) 총량만 관리**(`docs/06-open-questions.md` Q1). API 제약(60자)과 비용 기준(`SKL010` 120자 경고)을 분리해 문서화했고, 개별 길이를 손으로 줄이지 않는다.
+- [x] `.archive/` 처리 (Q3, 2026-11-28) — 822 → **791개**, 그중 **31개 복구**.
+  기준: ① **MEMORY.md/USER.md가 이름으로 참조하는 6개**(`skill_view` 가 not found 였다 — 메모리가
+  지시하는 파일이 없는 상태) ② 내가 만든 것 중 사용 기록이 있는 것 ③ 연쇄 참조 2개.
+  복구가 **깨진 참조 2건**을 드러냈다(둘 다 `coding-tool-orchestration/references/` 에 실재하는데
+  상대경로 표기 때문에 못 찾던 것 — 감사 A5와 같은 결함). 나머지는 tar 백업
+  (`~/.hermes/state/slopgate/archive-backup-20261128.tar.gz`, 791개 확인) + 색인
+  (`docs/archive-index.md`·`docs/archive-names.txt`). 삭제하지 않았다 — 되돌릴 수 없고 인덱스 비용이 0.
 - [x] 40,000자 초과 스킬 분할 착수 — `coding-tool-orchestration` 99,972 → **37,181자**
   (Pitfalls 48,068자를 `references/pitfalls.md`로 원문 이관 58/58 검증, Linked Files 20,703 → 4,969자). 2026-11-27
 - [x] 40,000자 초과 스킬 분할 — 남은 8개를 `scripts/split_skill.py`로 처리(2026-11-27). 도구가 절을
