@@ -569,6 +569,10 @@ def test_docs_lint(tmp: str) -> None:
     code10, out10 = run_docs("2026-11-26-snap2.md", "# t\n## 현재 상태\n- 스킬 970개\n")
     check("스냅샷 문서는 여전히 면제", "DOC001" not in out10 and "DOC002" not in out10, out10[:400])
 
+    # 영어 표기도 같은 자기모순이다 — 문서를 영어로 쓰는 순간 게이트가 조용해지면 안 된다
+    code11, out11 = run_docs("i.md", "# t\n## Current baseline (2026-11-26)\n- 970 skills\n")
+    check("영어 'Current' + 날짜도 DOC002", "DOC002" in out11, out11[:400])
+
     code7, out7 = run_docs("f.md", "# t\n그냥 문서다\n")
     check("위반 없으면 조용하고 exit 0", "DOC001" not in out7 and code7 == 0, out7[:300])
 

@@ -49,7 +49,7 @@ SNAPSHOT_NAME = re.compile(r"20\d{2}-\d{2}")
 # 실제로 `## 현재 기준선 (2026-11-26)` 아래에 970개·99,617자가 남아 있었고, DOC001의
 # 날짜 예외가 그 절 전체를 면제해 아무 경고도 나오지 않았다. 문서를 읽는 사람은
 # "현재"라고 믿는다. 그래서 제목이 스스로 모순이면 그 절의 면제를 취소한다.
-CURRENTRY = re.compile(r"현재|현행|최신|as of today", re.I)
+CURRENTRY = re.compile(r"현재|현행|최신|as of today|\bcurrent\b|\blatest\b", re.I)
 
 
 def is_snapshot(path: Path, lines: list[str]) -> bool:
