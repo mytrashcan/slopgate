@@ -74,8 +74,13 @@ def scan(path: Path) -> list[dict]:
         return out
     dated_section = False
     for lineno, line in enumerate(lines, 1):
-        if line.startswith("#"):
-            dated_section = bool(DATED_HEADING.match(line))
+        setext = False
+        if lineno < len(lines) and line.strip() and not line.startswith("#"):
+            # Setext 제목: 텍스트 줄 바로 아래 `===` 또는 `---`. `##` 만 보면 이 형태를 놓친다.
+            nxt = lines[lineno] if lineno < len(lines) else ""
+            setext = bool(re.fullmatch(r"\s*(?:=+|-+)\s*", nxt)) and bool(re.search(r"20\d{2}-\d{2}", line))
+        if line.startswith("#") or setext:
+            dated_section = bool(DATED_HEADING.match(line)) or setext
             # 제목이 "현재 …(날짜)"면 자기모순이다: 날짜 면제를 취소하고 DOC002로 알린다.
             if dated_section and CURRENTRY.search(line):
                 out.append(dict(file=str(path), line=lineno, kind="현재 주장 + 날짜",

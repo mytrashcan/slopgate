@@ -49,6 +49,26 @@ def required_toolsets(*texts: str) -> dict[str, str]:
     return {k: v for k, v in found.items()}
 
 
+
+def _inherited_toolsets() -> list[str] | None:
+    """config.yaml 의 `platform_toolsets.cron` — 잡이 상속하는 실행 toolset.
+
+    못 읽으면 None(검사 불가). 빈 목록이면 빈 목록대로 반환한다 — 그게 실제 상속값이다.
+    """
+    cfg = Path.home() / ".hermes" / "config.yaml"
+    if not cfg.exists():
+        return None
+    try:
+        import yaml  # noqa: PLC0415
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    val = (data.get("platform_toolsets") or {}).get("cron")
+    if isinstance(val, list):
+        return [str(v) for v in val]
+    return None
+
+
 def _exists_archived(skills_root: Path, name: str) -> bool:
     """이 이름이 .archive/ 에만 있는가 — 호출 시점엔 Hermes 가 발견하지 못하는 스킬이다."""
     arc = skills_root / ".archive" / name
@@ -162,6 +182,10 @@ def main() -> int:
         # 호출이 조용히 실패한다(모델은 성공한 줄 안다). no_agent 크론은 도구가 없으니 제외.
         if not j.get("no_agent"):
             allowed = j.get("enabled_toolsets")
+            if allowed is None:
+                # Hermes 는 잡에 toolset 이 없으면 config 의 `platform_toolsets.cron` 을 상속한다.
+                # None 을 '검사 안 함'으로 처리하면 상속된 제한(=실제 실행 환경)을 통째로 못 본다.
+                allowed = _inherited_toolsets()
             if allowed is not None:
                 bodies = [j.get("prompt") or ""]
                 bodies += [p.read_text(encoding="utf-8", errors="replace") if (p := _skill_path(skroot, s)) else ""

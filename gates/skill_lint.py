@@ -121,8 +121,16 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
             fm[k] = ""
             continue
         # 인용 없는 평문도 다음 줄로 접힐 수 있다 — 지금 넣고, 뒷줄이 오면 이어 붙인다.
-        fm[k] = v
-        key, mode, buf = k, "plain", [v]
+        # 단, 값이 `#` 로 시작하면 세 값이 모두 빈 값이다: `description: # 메모`, `description:`,
+        # `description: ~`. yaml 경로가 그렇게 읽는데 fallback 이 `# 메모` 를 문자열로 삼키면
+        # **같은 파일이 CI(무 yaml)에서만 통과**한다 — 판정 뒤집힘(2026-11-28).
+        stripped_v = v.split("#", 1)[0].strip() if v.startswith("#") else v
+        if not stripped_v:
+            fm[k] = ""
+            key = None
+            continue
+        fm[k] = stripped_v
+        key, mode, buf = k, "plain", [stripped_v]
     flush()
     return fm, body
 
