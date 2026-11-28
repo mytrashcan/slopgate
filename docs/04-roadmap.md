@@ -33,6 +33,12 @@
   - `hermes-sweeper-gate.py`가 PR 후보마다 `EVIDENCE|<repo>#<n>|head=..|ci=..|fail=..|files=..|+X/-Y|review=..|merge=..` 1줄을 붙인다. 타임스탬프 없음 → 해시 안정(후보 없음 틱은 그대로 침묵).
   - 런북에 "리뷰 첫 줄에 이 증거를 인용하라, `ci=none`이면 실제로 읽거나 실행한 것을 적어라"를 넣었다. 산문 1단락 추가 대신 수집을 스크립트로 옮긴 형태(원칙 5).
   - 검증: `--selftest`에 결정론·CI 집계·pending·ci=none 케이스 추가, 실 PR(Rust-DMA#52)에서 `EVIDENCE|..|ci=10/10|fail=0|files=25|+364/-63|review=NONE|merge=CLEAN` 확인, 2회 실행 동일.
+  - **실제 리뷰 인용 관측(2026-11-28, 감사 A7)**: 위 확인은 게이트 *출력*이었고, 리뷰 댓글이 그 줄을
+    인용하는지는 미확인 상태였다. 전용 private 시험대(`mytrashcan/sweeper-testbed`)에 의도된 결함 3건을
+    심고 PR #1을 열어 스위퍼를 1회 돌린 결과, 리뷰 첫 줄이 `EVIDENCE|…|ci=none|fail=0|files=2|+34/-0|…`를
+    그대로 인용했고 `ci=none`이라 CI를 단정하지 않고 `f2df5c1`을 직접 클론해 `git diff --stat` 대조 +
+    `pytest` 실행(3 passed)으로 검증한 뒤 결함 4건을 적출했다. 심은 3건 전부 재현 확인 = 판정이 사실이다.
+    상세: `docs/09-audit-2026-11-28.md` A7.
 - [x] 토큰 분포 측정 시작 — `scripts/token_report.py`(역할별·모델별·일별, 토큰 비용 0). `last_seen`이 epoch 초라는 함정과 0달러를 '무료'로 오독하지 않게 처리 (2026-11-27)
 - [x] 날짜 린트 게이트 추가 — `gates/date_bomb.py` + `tests/test_gates.py` + CI 워크플로우. 오탐 4종(버전 문자열·맨 정수·hex·URL 쿼리) 제거 확인 (2026-11-26)
 
