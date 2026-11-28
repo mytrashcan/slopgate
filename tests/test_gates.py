@@ -823,6 +823,25 @@ def test_skill_lint_cross_ref(tmp: str) -> None:
     code3, out3 = run_gate("skill_lint.py", ["--skills-dir", root3])
     check("설치본에 있는 스킬 참조는 통과", "SKL024" not in out3, out3[:500])
 
+    # 스킬이 '카테고리 아래' 있는 실제 구조에서는 `some-skill/references/x.md` 가 열리지 않는다.
+    # 파일은 실재하지만 `~/.hermes/skills/` 기준 경로가 아니라서 `skill_view` 로도 상대경로로도 못 연다.
+    # (실제 사례: project-readiness-triage 가 `coding-tool-orchestration/references/…` 라고 적었는데
+    #  실제 파일은 `software-development/coding-tool-orchestration/references/…` 였다.)
+    root4 = os.path.join(d, "skills4")
+    cat = os.path.join(root4, "software-development")
+    write(os.path.join(cat, "target", "SKILL.md"), head.format(n="target") + "body\n")
+    write(os.path.join(cat, "target", "references", "x.md"), "내용\n")
+    write(os.path.join(cat, "caller", "SKILL.md"),
+          head.format(n="caller") + "see `target/references/x.md`.\n")
+    code4, out4 = run_gate("skill_lint.py", ["--skills-dir", root4])
+    check("카테고리 아래 스킬을 상대경로로 지시하면 SKL024",
+          "SKL024" in out4 and "열리지 않는다" in out4, out4[:500])
+
+    write(os.path.join(cat, "caller", "SKILL.md"),
+          head.format(n="caller") + "see `software-development/target/references/x.md`.\n")
+    code5, out5 = run_gate("skill_lint.py", ["--skills-dir", root4])
+    check("카테고리 포함 실제 경로는 통과", "SKL024" not in out5, out5[:500])
+
 
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="slopgate-tests-")

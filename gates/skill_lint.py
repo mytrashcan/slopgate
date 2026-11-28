@@ -34,7 +34,7 @@ REL_LINK = re.compile(r"`((?:references|templates|scripts|assets)/[^`\s]+\.[A-Za
 # REL_LINK 는 `references/` 로 '시작'하는 경로만 보므로 이 꼴을 통째로 놓친다.
 # 실제 사례: agent-semantic-layer 가 `write-for-reader/references/의도_발굴.md` 를 지시했는데
 # 그 스킬은 Hermes 에 없고 레포 안에만 있었다 — 에이전트는 읽을 파일을 못 찾는다.
-CROSS_LINK = re.compile(r"`([a-z0-9][a-z0-9_-]*)/(?:references|templates|assets)/[^`\s]+\.[A-Za-z0-9]+`")
+CROSS_LINK = re.compile(r"`([a-z0-9][a-z0-9_-]*)/(references|templates|assets)/([^`\s]+\.[A-Za-z0-9]+)`")
 FM = re.compile(r"\A---\r?\n(.*?)\r?\n---", re.S)
 
 
@@ -383,18 +383,26 @@ def main() -> int:
                     findings.append(dict(sev="W", id="SKL004", file=rel,
                                          msg=f"아카이브된 스킬을 참조: {cand}"))
 
-    # SKL024 다른 스킬 디렉터리의 파일을 상대경로로 지시했는데 그 스킬이 이 설치본에 없다.
-    # `skill_view` 로도 못 열고 파일도 없으니, 지시를 받은 에이전트는 조용히 아무것도 못 읽는다.
-    # (레포 전용 스킬을 가리키는 경우가 흔하므로 경고다 — 다만 '레포 스킬'이라고 명시해야 한다.)
+    # SKL024 다른 스킬 디렉터리를 **상대경로로** 지시했을 때, 그 표기가 실제로 열리는 경로인지 본다.
+    # 두 경우 모두 결함이다:
+    #   ① 그 스킬이 이 설치본에 없다 (레포 전용 스킬을 Hermes 스킬처럼 부른 경우)
+    #   ② 스킬은 있지만 `some-skill/references/x.md` 는 `~/.hermes/skills/` 기준 경로가 아니다 —
+    #      실제 파일은 `<카테고리>/some-skill/references/x.md` 에 있다. `skill_view` 로도 못 열고,
+    #      상대경로로도 못 연다. SKL003 은 `references/` 로 '시작'하는 자기 참조만 보므로 새어 나간다.
     for p in paths:
         rel = str(p.relative_to(root))
         text = p.read_text(encoding="utf-8", errors="replace")
-        for cand in sorted(set(CROSS_LINK.findall(text))):
-            if cand in loaded or cand == p.parent.name:
+        for cand, sub, fname in sorted(set(CROSS_LINK.findall(text))):
+            if cand == p.parent.name:
                 continue
-            findings.append(dict(sev="W", id="SKL024", file=rel,
-                                 msg=f"`{cand}/` 스킬을 참조하는데 이 설치본에 없다 — "
-                                     f"레포 전용 스킬이면 경로를 `.claude/skills/` 로 명시하라"))
+            if cand not in loaded:
+                findings.append(dict(sev="W", id="SKL024", file=rel,
+                                     msg=f"`{cand}/` 스킬을 참조하는데 이 설치본에 없다 — "
+                                         f"레포 전용 스킬이면 경로를 `.claude/skills/` 로 명시하라"))
+            elif not (root / cand / sub / fname).exists():
+                findings.append(dict(sev="W", id="SKL024", file=rel,
+                                     msg=f"`{cand}/{sub}/{fname}` 는 `~/.hermes/skills/` 기준으로 "
+                                         f"열리지 않는다(스킬은 카테고리 아래에 있다) — 실제 경로를 적어라"))
 
     if no_trigger:
         findings.append(dict(sev="W", id="SKL021", file="(index)",
