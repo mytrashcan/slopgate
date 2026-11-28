@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -61,7 +60,7 @@ def is_snapshot(path: Path, lines: list[str]) -> bool:
     """
     if SNAPSHOT_NAME.search(path.name):
         return True
-    return any("docs-lint: snapshot" in l for l in lines[:5])
+    return any("docs-lint: snapshot" in line for line in lines[:5])
 
 
 def scan(path: Path) -> list[dict]:

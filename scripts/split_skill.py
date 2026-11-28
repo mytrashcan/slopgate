@@ -30,14 +30,38 @@ import sys
 from pathlib import Path
 
 FM = re.compile(r"^---\n.*?\n---\n", re.S)
+FENCE_LINE = re.compile(r"^\s*(?:```|~~~)")
+
+
+def _split_outside_fences(body: str) -> list[str]:
+    """`## ` 경계로 자르되 **코드펜스 밖의 경계만** 인정한다.
+
+    왜: 스킬 본문에는 ```markdown 예시 블록이 흔하고, 그 안에 `## 제목` 꼴 줄이 들어 있다.
+    펜스 상태를 무시하면 그 줄을 진짜 절 경계로 착각해 절이 펜스 중간에서 잘린다 —
+    옮긴 파일과 남은 파일 양쪽에 닫히지 않은 펜스가 생기고, 렌더러는 그 뒤를 전부 코드로 본다.
+    """
+    parts: list[str] = []
+    cur: list[str] = []
+    fence = False
+    for line in body.splitlines(keepends=True):
+        if FENCE_LINE.match(line):
+            fence = not fence
+            cur.append(line)
+        elif not fence and line.startswith("## "):
+            parts.append("".join(cur))
+            cur = [line]
+        else:
+            cur.append(line)
+    parts.append("".join(cur))
+    return parts
 
 
 def sections(text: str) -> tuple[str, str, list[tuple[str, str]]]:
-    """(frontmatter, preamble, [(title, section_text)]) — 절은 `## ` 경계로 자른다."""
+    """(frontmatter, preamble, [(title, section_text)]) — 절은 코드펜스 **밖의** `## ` 경계로 자른다."""
     m = FM.match(text)
     head = m.group(0) if m else ""
     body = text[len(head):]
-    parts = re.split(r"(?m)^(?=## )", body)
+    parts = _split_outside_fences(body)
     pre, rest = parts[0], parts[1:]
     out = []
     for s in rest:
@@ -46,6 +70,11 @@ def sections(text: str) -> tuple[str, str, list[tuple[str, str]]]:
             continue
         out.append((mt.group(1).strip(), s))
     return head, pre, out
+
+
+def unbalanced_fences(text: str) -> bool:
+    """닫히지 않은 코드펜스가 있으면 True. 분할 결과 검증에 쓴다."""
+    return sum(1 for line in text.splitlines() if FENCE_LINE.match(line)) % 2 == 1
 
 
 def bullets(section: str) -> int:
@@ -62,6 +91,10 @@ def validate(text: str, moves: list[dict]) -> list[str]:
     missing = [m["title"] for m in moves if m["title"] not in titles]
     if missing:
         return [f"절 없음: {missing}"]
+    # 같은 제목의 절이 둘 이상이면 by[title] 이 마지막 하나만 잡아 앞엣것이 조용히 사라진다.
+    dup = sorted({t for t, _ in secs if [x for x, _ in secs].count(t) > 1} & {m["title"] for m in moves})
+    if dup:
+        return [f"제목이 중복된 절은 옮길 수 없다(내용 유실): {dup}"]
     errs = []
     for m in moves:
         if not m["ref"].startswith("references/") or not m["ref"].endswith(".md"):
@@ -121,6 +154,14 @@ def apply(item: dict) -> dict:
         new_text = head + new_body
         if not new_text.startswith(head):
             raise RuntimeError("frontmatter가 변했다")
+        # 펜스 균형: 분할 전에는 짝수였는데 후에 홀수가 되면 절이 펜스 중간에서 잘린 것이다.
+        if unbalanced_fences(new_text) and not unbalanced_fences(text):
+            raise RuntimeError("SKILL.md 코드펜스가 짝이 안 맞는다 — 절이 펜스 중간에서 잘렸다")
+        for m in moves:
+            ref = sd / m["ref"]
+            rt = ref.read_text(encoding="utf-8")
+            if unbalanced_fences(rt):
+                raise RuntimeError(f"{m['ref']} 코드펜스가 짝이 안 맞는다 — 이관 절 경계가 펜스 안이다")
         path.write_text(new_text, encoding="utf-8")
 
         # SKILL.md에 `references/...` 목록이 있으면 새 파일을 등록한다(없으면 만들지 않는다).

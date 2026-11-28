@@ -618,6 +618,41 @@ def test_split_skill(tmp: str) -> None:
         untouched = fh.read()
     check("ref 형식이 틀리면 쓰지 않고 거부", code == 1 and sec_a in untouched, out[:300])
 
+    # 코드펜스 안의 `## ` 는 절 경계가 아니다. 이걸 경계로 착각하면 절이 펜스 중간에서
+    # 잘려 두 파일 모두에 닫히지 않은 펜스가 생기고, 렌더러는 그 뒤를 전부 코드로 본다.
+    # (실제로 research-paper-writing 이 이렇게 깨졌다: SKILL.md 펜스 11개=홀수.)
+    fd = os.path.join(d, "fenced")
+    fsd = os.path.join(fd, "fenced-skill")
+    os.makedirs(fsd, exist_ok=True)
+    fenced_body = (
+        "## Real Section\n\n"
+        "본문 앞.\n\n"
+        "```markdown\n"
+        "## This Heading Is Inside A Fence\n"
+        "템플릿 내용\n"
+        "```\n\n"
+        "본문 뒤.\n\n"
+        "## Second Section\n\n"
+        "둘째.\n"
+    )
+    write(os.path.join(fsd, "SKILL.md"), head + fenced_body)
+    fplan = os.path.join(fd, "fplan.json")
+    write(fplan, json.dumps([{"skill": fsd, "moves": [
+        {"title": "Real Section", "ref": "references/real.md", "pointer": "항목 {n}개"}]}], ensure_ascii=False))
+    code, out = run_tool("split_skill.py", [fplan, "--apply"])
+    fcur = open(os.path.join(fsd, "SKILL.md"), encoding="utf-8").read()
+    fref = open(os.path.join(fsd, "references/real.md"), encoding="utf-8").read()
+
+    def fences(t: str) -> int:
+        return sum(1 for line in t.splitlines() if line.lstrip().startswith("```"))
+
+    check("펜스 안 `## ` 를 절로 오인하지 않는다", code == 0 and fences(fcur) % 2 == 0,
+          f"SKILL 펜스 {fences(fcur)} · {out[:200]}")
+    check("이관 파일도 펜스가 짝을 이룬다", fences(fref) % 2 == 0, f"ref 펜스 {fences(fref)}")
+    check("펜스 안 헤딩이 든 절이 통째로 이관된다",
+          "## This Heading Is Inside A Fence" in fref and "본문 뒤." in fref, fref[:400])
+    check("펜스 안 헤딩을 별도 절로 세지 않는다", "This Heading Is Inside A Fence" not in fcur, fcur[-300:])
+
     # {n} 없는 포인터도 거부 — 개수를 숨기면 열어야 할지 판단할 수 없다
     nplan = os.path.join(d, "noplan.json")
     write(nplan, json.dumps([{"skill": bad, "moves": [
@@ -695,6 +730,41 @@ def test_skill_lint_overlap(tmp: str) -> None:
     check("reason 있는 예외는 인정", "SKL022" not in out5, out5[:600])
 
 
+def test_skill_lint_fence(tmp: str) -> None:
+    """SKL023 — 코드펜스 짝.
+
+    왜 게이트인가: 펜스가 홀수면 그 뒤 본문 전체가 코드로 렌더돼 지시가 화면에서 사라진다.
+    파일은 멀쩡해 보이고(글자는 다 있다) 아무 게이트도 울리지 않아서 조용히 지식이 죽는다.
+    실제로 분할 도구가 펜스 안의 `## ` 를 절 경계로 착각해 이 모양을 만들었다.
+    """
+    print("skill_lint (SKL023 펜스 짝)")
+    d = os.path.join(tmp, "skl23")
+    root = os.path.join(d, "skills")
+    head = "---\nname: {n}\ndescription: Use when testing fence parity.\n---\n\n"
+
+    write(os.path.join(root, "odd-fence", "SKILL.md"),
+          head.format(n="odd-fence") + "```bash\necho hi\n")
+    code, out = run_gate("skill_lint.py", ["--skills-dir", root])
+    check("홀수 펜스를 잡는다", "SKL023" in out and "odd-fence" in out, out[:500])
+    check("SKL023 은 오류라 exit 1", code == 1, f"exit={code}")
+
+    root2 = os.path.join(d, "skills2")
+    write(os.path.join(root2, "even-fence", "SKILL.md"),
+          head.format(n="even-fence") + "```bash\necho hi\n```\n\n```\nblock\n```\n")
+    write(os.path.join(root2, "fence-in-list", "SKILL.md"),
+          head.format(n="fence-in-list") + "1. step\n   ```bash\n   echo hi\n   ```\n")
+    code2, out2 = run_gate("skill_lint.py", ["--skills-dir", root2])
+    check("짝이 맞으면 조용하다(들여쓴 펜스 포함)", "SKL023" not in out2, out2[:500])
+
+    # 펜스 '안'의 `## ` 는 절 경계가 아니다 — 이걸 절로 세면 분할이 펜스를 쪼갠다
+    root3 = os.path.join(d, "skills3")
+    write(os.path.join(root3, "fenced-heading", "SKILL.md"),
+          head.format(n="fenced-heading")
+          + "## Real\n\n```markdown\n## Inside The Fence\n```\n\n## After\n\nbody\n")
+    code3, out3 = run_gate("skill_lint.py", ["--skills-dir", root3])
+    check("펜스 안 헤딩이 있어도 짝만 맞으면 통과", "SKL023" not in out3, out3[:500])
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="slopgate-tests-")
     try:
@@ -706,6 +776,7 @@ def main() -> int:
         test_docs_lint(tmp)
         test_skill_lint_archived_refs(tmp)
         test_skill_lint_overlap(tmp)
+        test_skill_lint_fence(tmp)
         test_split_skill(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

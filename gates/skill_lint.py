@@ -177,6 +177,8 @@ def fold_lines(lines: list) -> str:
 # Hermes 는 시스템 프롬프트 인덱스에서 설명을 60자로 자른다(agent/skill_utils.SKILL_PROMPT_DESC_LIMIT).
 # 즉 60자를 넘는 부분은 매 세션 비용에 포함되지 않는다. 비용 지표는 '잘린 길이'로 계산해야 맞다.
 PROMPT_DESC_LIMIT = 60
+# 코드펜스 시작 줄(``` 또는 ~~~, 앞 공백 허용). SKL023 이 짝을 센다.
+FENCE_OPEN = re.compile(r"^\s*(?:```|~~~)")
 TRIGGER_CUE = re.compile(r"\b(use when|use for|whenever|when you|when an? |when the |use to|for tasks?)\b", re.I)
 
 # SKL022 — 같은 트리거를 노리는 스킬 쌍.
@@ -338,6 +340,12 @@ def main() -> int:
         if len(text) > BODY_WARN_CHARS:
             findings.append(dict(sev="W", id="SKL011", file=rel,
                                  msg=f"SKILL.md {len(text)}자 (분할 후보)"))
+
+        # SKL023 — 코드펜스 짝. 홀수면 그 뒤 전체가 코드로 렌더돼 지시가 본문에서 사라진다.
+        # 분할 도구가 펜스 안의 `## ` 를 절 경계로 착각하면 정확히 이 모양이 된다(실측 1건).
+        if sum(1 for line in text.splitlines() if FENCE_OPEN.match(line)) % 2:
+            findings.append(dict(sev="E", id="SKL023", file=rel,
+                                 msg="코드펜스 짝이 안 맞는다 — 이 뒤 본문이 전부 코드로 렌더된다"))
 
         # `references/`·`templates/`·`assets/` 는 스킬 로컬 규약이라 디렉터리가 없어도
         # '자기 것을 가리킨다'고 본다 → 디렉터리 부재도 위반으로 잡는다.
