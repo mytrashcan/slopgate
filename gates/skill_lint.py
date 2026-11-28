@@ -179,6 +179,105 @@ def fold_lines(lines: list) -> str:
 PROMPT_DESC_LIMIT = 60
 TRIGGER_CUE = re.compile(r"\b(use when|use for|whenever|when you|when an? |when the |use to|for tasks?)\b", re.I)
 
+# SKL022 — 같은 트리거를 노리는 스킬 쌍.
+#
+# 실패 모드: 인덱스에 두 스킬이 거의 같은 문장으로 뜨면 에이전트는 둘 중 하나를 골라야 하고,
+# 고르는 기준이 없다. 그러면 (a) 엉뚱한 것을 로드해 헛읽음하고 (b) 있는 지식을 못 찾는다.
+# 판정은 **인덱스에 실제로 보이는 60자**로 한다 — 본문이 아무리 달라도 에이전트는 그 60자만 본다.
+#
+# 두 축을 함께 본다:
+#   head_containment: 설명 앞 60자의 내용어가 얼마나 겹치는가 (작은 쪽 기준)
+#   name_containment: 이름에서 선행 동사(analyzing-/building- …)를 뗀 주제어가 얼마나 겹치는가
+# 둘 다 높아야 '같은 일을 하는 두 스킬'이다. 이름만 보면 `analyzing-*` 43쌍이 쏟아지고(오탐),
+# 설명만 보면 도구만 다른 쌍(예: claude-code ↔ codex)이 걸린다. 실측 조합에서 10쌍이 나왔다.
+OVERLAP_STOP = frozenset((
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "use", "used", "using",
+    "when", "whenever", "this", "that", "these", "those", "your", "you", "it", "is", "are", "be",
+    "can", "will", "from", "as", "at", "by", "not", "if", "then", "than", "into", "out", "up", "so",
+    "we", "i", "via", "their", "its",
+))
+# 이름 선행 동사 — 이걸 떼야 `analyzing-x` 와 `auditing-x` 가 같은 주제로 비교된다.
+OVERLAP_VERBS = frozenset((
+    "analyzing", "auditing", "building", "collecting", "performing", "detecting", "implementing",
+    "managing", "generating", "extracting", "assessing", "designing", "deploying", "monitoring",
+    "correlating", "evaluating", "executing", "creating", "writing", "reviewing", "testing",
+    "finding", "running", "making", "serving", "handling", "checking", "fixing", "shipping",
+))
+WORD = re.compile(r"[A-Za-z][A-Za-z0-9+]{1,}")
+NAME_SPLIT = re.compile(r"[-_ ]")
+# 이름에서 주제를 흐리는 일반어. 이걸 안 빼면 `analyzing-prefetch-files-for-execution-history` 와
+# `analyzing-windows-prefetch-with-python`(같은 도구·같은 아티팩트)이 0.33으로 떨어져 놓친다 —
+# 두 이름의 공통 주제어는 `prefetch` 하나뿐인데 일반어(files/python/windows)가 분모를 키운다.
+NAME_GENERIC = frozenset((
+    "files", "file", "windows", "linux", "macos", "artifacts", "logs", "data", "python",
+    "analysis", "security", "incident", "events", "using", "based", "from",
+))
+OVERLAP_HEAD_MIN = 0.5
+OVERLAP_NAME_MIN = 0.5
+
+
+def _words(s: str) -> set:
+    return {w.lower() for w in WORD.findall(s) if w.lower() not in OVERLAP_STOP}
+
+
+def _subject(name: str) -> set:
+    """이름에서 선행 동사·불용어·일반어를 뗀 주제어 집합."""
+    parts = [w.lower() for w in NAME_SPLIT.split(name) if w]
+    if parts and parts[0] in OVERLAP_VERBS:
+        parts = parts[1:]
+    return {w for w in parts if w not in OVERLAP_STOP and w not in NAME_GENERIC and len(w) > 2}
+
+
+def _containment(a: set, b: set) -> float:
+    small = min(len(a), len(b))
+    return len(a & b) / small if small else 0.0
+
+
+def _leading(head: str, n: int = 2) -> set:
+    """인덱스 줄 앞머리의 내용어 n개. 에이전트는 줄을 왼쪽부터 읽으므로 '앞머리가 갈리면' 고를 수 있다."""
+    out = []
+    for w in WORD.findall(head):
+        lw = w.lower()
+        if lw in OVERLAP_STOP:
+            continue
+        out.append(lw)
+        if len(out) >= n:
+            break
+    return set(out)
+
+
+def overlap_pairs(entries: list) -> list:
+    """(rel, name, head) 목록에서 '같은 트리거를 노리는' 쌍을 찾는다.
+
+    앞머리(_leading)가 갈리면 보고하지 않는다 — `PECmd-based: …` 와 `windowsprefetch library: …` 처럼
+    도구 이름이 앞에 있으면 에이전트는 첫 단어로 고를 수 있다. 이 예외가 없으면 설명을 실제로
+    구분해 놓고도 게이트가 계속 울려서, 결국 무시된다.
+    """
+    out = []
+    for i in range(len(entries)):
+        rel_a, name_a, head_a = entries[i]
+        wa, sa = _words(head_a), _subject(name_a)
+        if len(wa) < 3 or len(sa) < 1:
+            continue
+        la = _leading(head_a)
+        for j in range(i + 1, len(entries)):
+            rel_b, name_b, head_b = entries[j]
+            wb, sb = _words(head_b), _subject(name_b)
+            if len(wb) < 3 or len(sb) < 1 or not (sa & sb):
+                continue
+            if la and _leading(head_b) and not (la & _leading(head_b)):
+                continue
+            hc = _containment(wa, wb)
+            if hc < OVERLAP_HEAD_MIN:
+                continue
+            nc = _containment(sa, sb)
+            if nc < OVERLAP_NAME_MIN:
+                continue
+            out.append(dict(hc=round(hc, 2), nc=round(nc, 2), a=name_a, b=name_b,
+                            file=rel_a, other=rel_b, head=head_a))
+    out.sort(key=lambda x: -(x["hc"] + x["nc"]))
+    return out
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -188,6 +287,8 @@ def main() -> int:
     ap.add_argument("--strict", action="store_true")
     ap.add_argument("--include-archive", action="store_true",
                     help=".archive/ 아래 스킬도 검사 (기본은 제외)")
+    ap.add_argument("--overlap-allow", default=None,
+                    help="SKL022 예외 목록(JSON). 각 항목에 reason이 없으면 예외로 인정하지 않는다")
     args = ap.parse_args()
 
     root = Path(os.path.expanduser(args.skills_dir))
@@ -203,6 +304,7 @@ def main() -> int:
     raw_desc_chars = 0  # 원본 설명 총량 (참고용)
     no_trigger: list[str] = []  # 60자 클립에서 트리거가 사라지는 스킬
     loaded: set[str] = set()    # 이번 실행에서 활성인 스킬 이름 (SKL004 교차검사용)
+    index_rows: list[tuple] = []  # (rel, name, head) — SKL022 입력
 
     for p in paths:
         rel = str(p.relative_to(root))
@@ -227,6 +329,8 @@ def main() -> int:
         prompt_desc = desc if len(desc) <= PROMPT_DESC_LIMIT else desc[:PROMPT_DESC_LIMIT - 3] + "..."
         index_chars += len(name) + len(prompt_desc) + 6
         raw_desc_chars += len(desc)
+        if name:
+            index_rows.append((rel, name, prompt_desc))
 
         if len(desc) > DESC_WARN_CHARS:
             findings.append(dict(sev="W", id="SKL010", file=rel,
@@ -270,6 +374,29 @@ def main() -> int:
         findings.append(dict(sev="W", id="SKL021", file="(index)",
                              msg=f"{len(no_trigger)}개 스킬의 설명이 60자에서 잘려 '언제 쓰는지'가 "
                                  f"인덱스에서 사라진다 (예: {', '.join(no_trigger[:3])})"))
+
+    # SKL022 같은 트리거를 노리는 스킬 쌍. 예외는 reason 이 있는 항목만 인정한다 —
+    # 이유 없는 예외는 다음 세션이 "왜 둘 다 있지"를 다시 묻게 만들 뿐이다.
+    allow: set = set()
+    if args.overlap_allow:
+        try:
+            raw = json.loads(Path(args.overlap_allow).read_text(encoding="utf-8"))
+            for item in raw.get("allow", raw) if isinstance(raw, dict) else raw:
+                if not isinstance(item, dict) or not str(item.get("reason", "")).strip():
+                    continue
+                allow.add(tuple(sorted((item["a"], item["b"]))))
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            findings.append(dict(sev="W", id="SKL022", file=(args.overlap_allow or ""),
+                                 msg=f"예외 목록을 읽지 못했다({type(e).__name__}) — 전부 보고한다"))
+    overlaps = [o for o in overlap_pairs(index_rows)
+                if tuple(sorted((o["a"], o["b"]))) not in allow]
+    if overlaps:
+        findings.append(dict(sev="W", id="SKL022", file="(index)",
+                             msg=f"{len(overlaps)}쌍이 같은 트리거를 노린다 — 인덱스 60자가 거의 같아 "
+                                 f"에이전트가 고를 기준이 없다 (예: {overlaps[0]['a']} ↔ {overlaps[0]['b']})"))
+        for o in overlaps:
+            findings.append(dict(sev="W", id="SKL022", file=o["file"],
+                                 msg=f"같은 트리거: `{o['b']}` (head {o['hc']:.2f} · name {o['nc']:.2f})"))
     if index_chars > args.index_budget:
         findings.append(dict(sev="W", id="SKL020", file="(index)",
                              msg=f"스킬 인덱스 {index_chars}자 > 예산 {args.index_budget}자"))

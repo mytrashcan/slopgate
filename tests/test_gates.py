@@ -605,6 +605,68 @@ def test_split_skill(tmp: str) -> None:
     check("없는 절 제목은 거부", code == 1 and "절 없음" in out, out[:300])
 
 
+def test_skill_lint_overlap(tmp: str) -> None:
+    """SKL022 — 같은 트리거를 노리는 스킬 쌍 탐지.
+
+    이 게이트의 목적은 '설명을 예쁘게'가 아니라 '에이전트가 60자만 보고 고를 수 있는가'다.
+    그래서 (a) 앞머리가 같은 쌍은 잡고 (b) 앞머리가 갈리는 쌍은 통과시키는지를 둘 다 확인한다.
+    """
+    print("skill_lint (SKL022 트리거 중복)")
+    d = os.path.join(tmp, "skl22")
+    root = os.path.join(d, "skills")
+    base = "---\nname: {n}\ndescription: {d}\n---\n\nbody\n"
+
+    def mk(name: str, desc: str) -> None:
+        write(os.path.join(root, name, "SKILL.md"), base.format(n=name, d=desc))
+
+    # ① 앞머리가 거의 같은 쌍 — 잡아야 한다
+    mk("analyzing-certificate-transparency-for-phishing",
+       "Monitor Certificate Transparency logs using crt.sh and Certstream to detect phishing domains.")
+    mk("analyzing-certificate-transparency-logs-dup",
+       "Monitor Certificate Transparency logs with crt.sh to detect rogue certificate issuance.")
+    code, out = run_gate("skill_lint.py", ["--skills-dir", root])
+    check("같은 트리거 쌍을 잡는다", "SKL022" in out and "analyzing-certificate-transparency-logs-dup" in out,
+          out[:600])
+    check("SKL022 는 경고라 exit 0", code == 0, f"exit={code}")
+
+    # ② 도구 이름을 앞에 붙여 구분한 쌍 — 통과해야 한다(이게 이 게이트의 해법이다)
+    root2 = os.path.join(d, "skills2")
+    root = root2
+    mk("parse-prefetch-with-pecmd",
+       "PECmd-based: parse Windows Prefetch files to determine program execution history and run counts.")
+    mk("parse-prefetch-with-python-lib",
+       "windowsprefetch library: parse Windows Prefetch files in Python for execution artifacts.")
+    code2, out2 = run_gate("skill_lint.py", ["--skills-dir", root2])
+    check("앞머리를 구분하면 통과", "SKL022" not in out2, out2[:600])
+
+    # ③ 이름 주제어가 아예 다르면 같은 동사로 시작해도 쌍이 아니다
+    root3 = os.path.join(d, "skills3")
+    mk("analyzing-network-traffic-for-incidents",
+       "Analyzes network traffic captures and flow data to identify adversary activity.")
+    mk("analyzing-windows-registry-for-artifacts",
+       "Extract and analyze Windows Registry hives to uncover user activity and autostart entries.")
+    code3, out3 = run_gate("skill_lint.py", ["--skills-dir", root3])
+    check("주제어가 다르면 쌍이 아니다", "SKL022" not in out3, out3[:600])
+
+    # ④ reason 없는 예외는 인정하지 않는다 — 이유 없는 예외는 다음 세션이 다시 묻는다
+    allowpath = os.path.join(d, "allow.json")
+    write(allowpath, json.dumps([
+        {"a": "analyzing-certificate-transparency-for-phishing",
+         "b": "analyzing-certificate-transparency-logs-dup", "reason": ""},
+    ], ensure_ascii=False))
+    code4, out4 = run_gate("skill_lint.py", ["--skills-dir", os.path.join(d, "skills"), "--overlap-allow", allowpath])
+    check("reason 없는 예외는 무시하고 계속 보고", "SKL022" in out4, out4[:600])
+
+    # ⑤ reason 이 있으면 그 쌍은 조용해진다
+    write(allowpath, json.dumps([
+        {"a": "analyzing-certificate-transparency-for-phishing",
+         "b": "analyzing-certificate-transparency-logs-dup",
+         "reason": "한쪽은 phishing 감시, 다른 쪽은 rogue cert 발급 감시 — 대상이 다르다"},
+    ], ensure_ascii=False))
+    code5, out5 = run_gate("skill_lint.py", ["--skills-dir", os.path.join(d, "skills"), "--overlap-allow", allowpath])
+    check("reason 있는 예외는 인정", "SKL022" not in out5, out5[:600])
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="slopgate-tests-")
     try:
@@ -615,6 +677,7 @@ def main() -> int:
         test_runtime_check(tmp)
         test_docs_lint(tmp)
         test_skill_lint_archived_refs(tmp)
+        test_skill_lint_overlap(tmp)
         test_split_skill(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
