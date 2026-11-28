@@ -12,7 +12,7 @@
 | SKL004 | skill_lint | 다른 스킬을 이름으로 부르는데 그 스킬이 `.archive/`에 있음 (경고) | 아카이브로 옮기면 호출자가 조용히 '스킬 없음'을 만난다. SKL003(파일 참조)과 다른 축 | 이동 후 9건→0건 |
 | SKL003 | skill_lint | `references/`·`scripts/`·`templates/`·`assets/` 백틱 참조가 실존하지 않음 | 에이전트가 스킬을 믿고 헛걸음하고 즉석 우회한다 | **12건 실패** |
 | SKL010 | skill_lint | description 120자 초과 | 인덱스 비용. 단 `skill_manage(create)`의 60자 제한과는 다른 축 | 62건 경고 |
-| SKL011 | skill_lint | SKILL.md 40,000자 초과 | 한 번 로드에 드는 컨텍스트. 분할 후보 | 8건 경고 |
+| SKL011 | skill_lint | SKILL.md 40,000자 초과 | 한 번 로드에 드는 컨텍스트. 분할 후보 → `scripts/split_skill.py`로 절을 `references/`로 옮긴다 | 0건 |
 | SKL020 | skill_lint | 인덱스 총량 > 예산(60,000자) | 매 세션 고정 비용 | 경고 |
 | MEM001/002 | memory_budget | MEMORY/USER 파일 부재·한도 초과 | 한도 초과 시 저장이 조용히 기존 항목을 밀어낸다 | 통과/경고 |
 | MEM003 | memory_budget | 한도의 90% 이상 사용 | 97%에서 이미 발생 중 | 경고 |

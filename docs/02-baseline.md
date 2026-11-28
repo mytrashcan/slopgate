@@ -90,6 +90,37 @@ Pitfalls 58개 원문은 `references/pitfalls.md`로 **한 글자도 바꾸지 �
 - usage 원장(`load_usage()`)에는 전체 970개가 아니라 **289개 레코드**만 있다. "usage에 없음"을
   "사용 안 됨"으로 읽으면 과대 삭제가 된다 → 팩 식별은 `author` 필드로, usage는 "남길 것"을 고르는 데만.
 
+### 같은 날 — 40,000자 초과 스킬 8개 분할
+
+`SKL011`이 잡던 8개를 `scripts/split_skill.py`로 처리했다. 이 스킬들은 인덱스가 아니라 **로드 비용**
+문제다(읽을 때마다 본문 전체가 컨텍스트에 들어온다).
+
+| 스킬 | 이전 | 이후 | 이관한 절 → 참조 파일 |
+|---|---|---|---|
+| `research-paper-writing` | 71,328 | **25,505** | Phase 0~3 / Phase 4·6·7 / Hermes 연동 (3개) |
+| `hermes-agent` | 54,020 | **29,155** | CLI Reference · Contributor Quick Reference · Key Paths · Slash Commands |
+| `github-code-review` | 50,248 | **31,202** | Review Checklist(19,228자) |
+| `korean-contest-sourcing` | 48,238 | **31,903** | Pitfalls(16,455자, 40항목) |
+| `agent-semantic-layer` | 47,414 | **33,499** | 공개 배포 · 실행기별 실측 · 백엔드 설계 규칙 |
+| `nara-bid-predictor-engineering` | 43,776 | **28,322** | 호스티드 러너 게이트 드리프트 · Claude 품질 패스 |
+| `drawio` | 42,929 | **22,080** | Bundled resources · Export |
+| `claude-code` | 42,432 | **31,476** | CLI 플래그 전체 · Pitfalls |
+
+합계 400,385 → **233,142자**. `SKL011` 경고 0.
+
+**도구가 검증하는 두 가지** (손으로 옮기면 확인이 안 되는 부분):
+1. 옮긴 절이 참조 파일에 **문자열 그대로** 들어갔는가 (`block.strip() in ref`). 실패하면 백업에서 복원.
+2. `원본 = 현재 SKILL.md + Σ(이관 절 − 포인터)` 재구성이 성립하는가. 이 등식이 없으면 "게이트는 좋아졌는데
+   지식이 조용히 사라진" 경우를 아무도 못 잡는다. `tests/test_gates.py`의 `test_split_skill`이 같은
+   등식을 픽스처로 확인한다.
+
+**포인터에 불릿 개수를 박는 이유**: `→ references/pitfalls.md — 항목 40개` 처럼 개수가 있어야
+"열어야 하나"를 판단할 수 있다. 개수 없는 포인터는 파일을 안 열게 만든다.
+
+**분할 후 남은 손질 2건** — 옮긴 절을 본문에서 `§Pitfalls` 같은 형태로 가리키던 상호참조 1건을
+`references/pitfalls.md`로 고쳤고, 포인터 문장의 `— 항목 N개 —` 중복 대시도 정리했다. 상호참조는
+분할 도구가 자동으로 못 잡는다(문장 의미를 알아야 한다) → 분할 후 `§`·절 이름 grep을 한 번 돌린다.
+
 ## 2026-11-26 갱신
 
 1단계 정리 후 실측. 게이트 전체가 **통과**(오류 0).

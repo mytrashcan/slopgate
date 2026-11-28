@@ -41,6 +41,13 @@ def run_gate(script: str, args: list[str]) -> tuple[int, str]:
     return p.returncode, p.stdout + p.stderr
 
 
+def run_tool(script: str, args: list[str]) -> tuple[int, str]:
+    """`scripts/` 아래 도구 실행. 게이트가 아니므로 경로만 다르고 계약은 같다(exit 0/1 + stdout)."""
+    p = subprocess.run([PY, os.path.join(ROOT, "scripts", script)] + args,
+                       capture_output=True, text=True)
+    return p.returncode, p.stdout + p.stderr
+
+
 # PyYAML 이 없는 환경(CI 러너·최소 설치)을 재현하는 실행기. 게이트는 yaml 이 있으면 쓰고
 # 없으면 자체 파서로 떨어지는데, 두 경로의 측정값이 달라지면 예산 판정이 환경마다 뒤집힌다.
 NO_YAML_BOOT = textwrap.dedent("""
@@ -518,6 +525,86 @@ def test_docs_lint(tmp: str) -> None:
     check("위반 없으면 조용하고 exit 0", "DOC001" not in out7 and code7 == 0, out7[:300])
 
 
+def test_split_skill(tmp: str) -> None:
+    """분할 도구 자체의 테스트 — 이관이 '한 글자도 안 바뀌는가'와 실패 시 복원을 확인한다.
+
+    이 도구는 스킬 본문을 잘라 옮기므로, 조용히 내용이 사라지면 게이트(SKL011)는 좋아지는데
+    지식은 없어진다. 그래서 옮긴 뒤 원문 재구성이 맞는지를 테스트로 못박는다.
+    """
+    print("split_skill")
+    d = os.path.join(tmp, "split")
+    sd = os.path.join(d, "sample-skill")
+    os.makedirs(sd, exist_ok=True)
+    head = "---\nname: sample-skill\ndescription: Use when sampling.\n---\n\n"
+    sec_keep = "## Keep Me\n\nshort body\n\n"
+    sec_a = "## Big A\n\n- one\n- two\n- three\n\n첫 문단 원문.\n\n"
+    sec_b = "## Big B\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n둘째 절 원문.\n"
+    write(os.path.join(sd, "SKILL.md"), head + sec_keep + sec_a + sec_b)
+
+    plan = [{"skill": sd, "moves": [
+        {"title": "Big A", "ref": "references/big-a.md", "pointer": "항목 {n}개 — A."},
+        {"title": "Big B", "ref": "references/big-b.md", "pointer": "항목 {n}개 — B."},
+    ]}]
+    ppath = os.path.join(d, "plan.json")
+    write(ppath, json.dumps(plan, ensure_ascii=False))
+
+    code, out = run_tool("split_skill.py", [ppath])
+    with open(os.path.join(sd, "SKILL.md"), encoding="utf-8") as fh:
+        after_preview = fh.read()
+    check("--apply 없이는 아무것도 쓰지 않는다", after_preview.count("## Big A") == 1 and code == 0, out[:300])
+
+    code, out = run_tool("split_skill.py", [ppath, "--apply"])
+    with open(os.path.join(sd, "SKILL.md"), encoding="utf-8") as fh:
+        cur = fh.read()
+    ref_a = open(os.path.join(sd, "references/big-a.md"), encoding="utf-8").read()
+    ref_b = open(os.path.join(sd, "references/big-b.md"), encoding="utf-8").read()
+
+    check("적용되면 성공 보고", code == 0 and "[OK]" in out, out[:300])
+    check("frontmatter는 그대로", cur.startswith(head), cur[:80])
+    check("남길 절은 그대로", sec_keep in cur, cur[:400])
+    check("이관된 절 원문이 참조 파일에 그대로", sec_a.strip() in ref_a and sec_b.strip() in ref_b,
+          f"{len(ref_a)}/{len(ref_b)}")
+    check("SKILL.md 에 포인터가 남는다", "`references/big-a.md`" in cur and "`references/big-b.md`" in cur,
+          cur[:500])
+    check("포인터에 불릿 개수가 치환된다", "항목 3개" in cur, cur[:600])
+    check("옮긴 절 본문은 SKILL.md 에서 사라진다", "첫 문단 원문" not in cur and "둘째 절 원문." not in cur,
+          cur[:600])
+
+    # 재구성 등식: 원본 = 현재 SKILL.md + Σ(이관 절 − 포인터)
+    recon = len(cur)
+    for title, blk, ref in (("Big A", sec_a, ref_a), ("Big B", sec_b, ref_b)):
+        start = ref.index(f"## {title}")
+        recon += len(ref[start:]) - len(cur[cur.index(f"## {title}"):].split("\n## ")[0]) - 1
+    check("원문 재구성이 원본 길이와 맞는다", abs(recon - len(head + sec_keep + sec_a + sec_b)) <= 3,
+          f"recon={recon} orig={len(head + sec_keep + sec_a + sec_b)}")
+
+    # 잘못된 ref 는 쓰기 전에 거부한다(references/*.md 만 허용)
+    bad = os.path.join(d, "bad")
+    os.makedirs(bad, exist_ok=True)
+    write(os.path.join(bad, "SKILL.md"), head + sec_keep + sec_a)
+    bplan = os.path.join(d, "bad.json")
+    write(bplan, json.dumps([{"skill": bad, "moves": [
+        {"title": "Big A", "ref": "notes.md", "pointer": "항목 {n}개"}]}], ensure_ascii=False))
+    code, out = run_tool("split_skill.py", [bplan, "--apply"])
+    with open(os.path.join(bad, "SKILL.md"), encoding="utf-8") as fh:
+        untouched = fh.read()
+    check("ref 형식이 틀리면 쓰지 않고 거부", code == 1 and sec_a in untouched, out[:300])
+
+    # {n} 없는 포인터도 거부 — 개수를 숨기면 열어야 할지 판단할 수 없다
+    nplan = os.path.join(d, "noplan.json")
+    write(nplan, json.dumps([{"skill": bad, "moves": [
+        {"title": "Big A", "ref": "references/a.md", "pointer": "항목 참고"}]}], ensure_ascii=False))
+    code, out = run_tool("split_skill.py", [nplan, "--apply"])
+    check("{n} 없는 포인터는 거부", code == 1 and "{n}" in out, out[:300])
+
+    # 없는 절 제목은 거부
+    mplan = os.path.join(d, "mplan.json")
+    write(mplan, json.dumps([{"skill": bad, "moves": [
+        {"title": "Nope", "ref": "references/a.md", "pointer": "항목 {n}개"}]}], ensure_ascii=False))
+    code, out = run_tool("split_skill.py", [mplan, "--apply"])
+    check("없는 절 제목은 거부", code == 1 and "절 없음" in out, out[:300])
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="slopgate-tests-")
     try:
@@ -528,6 +615,7 @@ def main() -> int:
         test_runtime_check(tmp)
         test_docs_lint(tmp)
         test_skill_lint_archived_refs(tmp)
+        test_split_skill(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

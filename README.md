@@ -47,6 +47,9 @@ gates/            실행되는 검사 (본체)
   run_all.sh        전체 실행 + 요약 (+ --self-test, --repos)
 tests/
   test_gates.py     게이트 자체 테스트 — 일부러 위반을 만들어 잡히는지 확인
+scripts/
+  split_skill.py    SKILL.md의 큰 절을 references/로 원문 그대로 옮긴다 (이관 검증 + 실패 시 복원)
+  rewrite_descriptions.py  스킬 설명 배치 수정 (트리거 접두 추가)
 docs/
   00-talk-notes.md     강연 주장 정리 (타임스탬프별) + 가져올 것/버릴 것
   01-model.md          코드 레포 → Hermes 대응 모델 (5계층)
