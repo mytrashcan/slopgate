@@ -60,6 +60,7 @@ docs/
   06-open-questions.md 방학 전에 정할 것
   07-pstack.md         강연의 실제 산출물(pstack) 이식 목록 — 가져올 것/못 가져올 것
   08-audit-2026-11-26.md  강연 5원칙 준수 감사 — 원칙별 판정과 실측 근거
+  09-audit-2026-11-28.md  오류 점검 — 변이 실험으로 찾은 결함 6건과 새 게이트 2개
 templates/
   correction-to-gate.md  "또 같은 실수" → 게이트로 바꾸는 양식
   gate-spec.md           게이트 명세 양식
