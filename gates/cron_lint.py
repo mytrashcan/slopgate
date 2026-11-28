@@ -49,9 +49,18 @@ def required_toolsets(*texts: str) -> dict[str, str]:
     return {k: v for k, v in found.items()}
 
 
+def _exists_archived(skills_root: Path, name: str) -> bool:
+    """이 이름이 .archive/ 에만 있는가 — 호출 시점엔 Hermes 가 발견하지 못하는 스킬이다."""
+    arc = skills_root / ".archive" / name
+    return arc.is_dir()
+
+
 def _skill_path(skills_root: Path, name: str) -> Path | None:
-    for p in skills_root.rglob(f"{name}/SKILL.md"):
-        return p
+    """스킬 본문 경로. **디렉터리는 돌려주지 않는다** — `SKILL.md` 라는 이름의 디렉터리가
+    있으면 호출자의 read_text 가 IsADirectoryError 로 죽었다(2026-11-28)."""
+    for p in sorted(skills_root.rglob(f"{name}/SKILL.md")):
+        if p.is_file():
+            return p
     return None
 
 
@@ -111,11 +120,28 @@ def main() -> int:
             errors += 1
         for key in ("script", "monitor_script"):
             f = j.get(key)
-            if f and not (sdir / f).exists():
+            if not f:
+                continue
+            target = sdir / f
+            if not target.exists():
                 print(f"[E] CRN002 {name}: {key}={f} 파일 없음")
                 errors += 1
+            elif target.is_dir():
+                # 디렉터리는 실행할 수 없다 — 크론이 매 틱 실패하고 원인은 여기서 안 보인다.
+                print(f"[E] CRN002 {name}: {key}={f} 가 디렉터리다 (실행 가능한 파일이어야 한다)")
+                errors += 1
         # CRN011 실효 프롬프트: 프롬프트 + 첨부 스킬 본문. 회차마다 그대로 토큰이 된다.
-        attached = j.get("skills") or []
+        # `skill`(단수, legacy) 와 `skills`(배열) 둘 다 유효한 필드다. 하나만 읽으면
+        # 나머지로 지정한 첨부가 비용 계산·도구 검사 양쪽에서 조용히 0으로 잡힌다.
+        attached = list(j.get("skills") or [])
+        if j.get("skill") and j["skill"] not in attached:
+            attached.append(j["skill"])
+        # 아카이브로 옮긴 스킬은 첨부해도 본문이 주입되지 않는다 — 발견되지 않기 때문이다.
+        # 파일은 있으니 '찾았다'로 처리하면 실행 시점에 지시가 조용히 사라진다(2026-11-28).
+        archived_attachments = [s for s in attached if skroot.exists() and _exists_archived(skroot, s)]
+        for s in archived_attachments:
+            print(f"[E] CRN012 {name}: 첨부 스킬 '{s}' 는 아카이브에만 있다 — 첨부해도 본문이 주입되지 않는다")
+            errors += 1
         eff, unknown = plen, []
         for s in attached:
             n = skill_body_chars(skroot, s) if skroot.exists() else None

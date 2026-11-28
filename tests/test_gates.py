@@ -383,6 +383,20 @@ def test_date_bomb(tmp: str) -> None:
     check("존재하지 않는 날짜는 오탐 없음", "2026-02-31" not in outs, outs[:400])
     check("오탐만 있는 트리는 exit 0", code == 0, f"exit={code} {outs[:300]}")
 
+    # --allow-file 은 docstring 예시처럼 '상대경로'로 쓰라고 안내되는데, 예전에는 abspath(cwd 기준)만
+    # 비교해서 루트 밖에서 돌리면 조용히 무시됐다 — 사용자는 예외가 걸린 줄 알고 실제 위반을 계속 본다.
+    al = os.path.join(tmp, "allow")
+    write(os.path.join(al, "tests", "test_a.py"), 'D = "2027-03-15"\n')
+    write(os.path.join(al, "tests", "test_b.py"), 'D = "2027-04-15"\n')
+    for form, label in (
+        ("tests/test_a.py", "root 상대경로"),
+        ("test_a.py", "파일명만"),
+        (os.path.join(al, "tests", "test_a.py"), "절대경로"),
+    ):
+        code_al, out_al = run_gate("date_bomb.py", [al, "--today", "2026-11-28", "--allow-file", form])
+        check(f"--allow-file {label} 이 실제로 제외된다",
+              out_al.count("[E] DAT001") == 1, f"{form}: {out_al.count('[E] DAT001')}건 {out_al[:300]}")
+
     # 점 구분(2026.12.20)·한국어(2027년 3월 15일) 표기도 날짜다. 예전에는 점 구분을 통째로
     # 제외했는데("버전 문자열이 흔해서"), 한국 공고문 픽스처는 대부분 이 형식이라 진짜 폭탄이
     # 전부 미검출이었다(contest-mcp에 7건). CalVer(`VERSION = "2026.12.31"`)는 식별자로 구분한다.

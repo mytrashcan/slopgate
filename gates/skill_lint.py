@@ -35,6 +35,10 @@ REL_LINK = re.compile(r"`((?:references|templates|scripts|assets)/[^`\s]+\.[A-Za
 # 실제 사례: agent-semantic-layer 가 `write-for-reader/references/의도_발굴.md` 를 지시했는데
 # 그 스킬은 Hermes 에 없고 레포 안에만 있었다 — 에이전트는 읽을 파일을 못 찾는다.
 CROSS_LINK = re.compile(r"`([a-z0-9][a-z0-9_-]*)/(references|templates|assets)/([^`\s]+\.[A-Za-z0-9]+)`")
+# 카테고리를 붙인 형태도 검사한다 — `<cat>/<skill>/references/x.md`. 형식만 맞고 파일이 없으면
+# 게이트의 안내를 따라 카테고리를 붙였는데도 여전히 못 여는 상태가 된다(2026-11-28).
+CROSS_LINK_CAT = re.compile(
+    r"`([a-z0-9][a-z0-9_-]*)/([a-z0-9][a-z0-9_-]*)/(references|templates|assets)/([^`\s]+\.[A-Za-z0-9]+)`")
 FM = re.compile(r"\A---\r?\n(.*?)\r?\n---", re.S)
 
 
@@ -182,8 +186,30 @@ def fold_lines(lines: list) -> str:
 # Hermes 는 시스템 프롬프트 인덱스에서 설명을 60자로 자른다(agent/skill_utils.SKILL_PROMPT_DESC_LIMIT).
 # 즉 60자를 넘는 부분은 매 세션 비용에 포함되지 않는다. 비용 지표는 '잘린 길이'로 계산해야 맞다.
 PROMPT_DESC_LIMIT = 60
-# 코드펜스 시작 줄(``` 또는 ~~~, 앞 공백 허용). SKL023 이 짝을 센다.
-FENCE_OPEN = re.compile(r"^\s*(?:```|~~~)")
+# 코드펜스 여는 줄. SKL023 이 짝을 세는데, `~~~` 가 ``` 를 닫거나 그 반대는 성립하지 않는다 —
+# 구분자 종류와 여는 길이를 함께 추적해야 한다(4중 백틱 안의 3중 백틱은 리터럴이다).
+FENCE_OPEN = re.compile(r"^(\s*)(`{3,}|~{3,})")
+
+
+def orphan_fence(text: str) -> bool:
+    """닫히지 않은 코드펜스가 있으면 True.
+
+    줄 개수만 세면 두 가지를 동시에 틀린다: (a) `~~~` 로 연 펜스를 ``` 로 닫았다고 세어
+    넘어가고(그 뒤 본문이 코드로 렌더된다) (b) 4중 백틱 안의 3중 백틱을 경계로 세어
+    정상 문서를 위반으로 만든다. CommonMark 의 닫는 규칙과 같은 방식으로 추적한다.
+    """
+    open_ch = ""
+    open_len = 0
+    for line in text.splitlines():
+        m = FENCE_OPEN.match(line)
+        if not m:
+            continue
+        ch, n = m.group(2)[0], len(m.group(2))
+        if not open_ch:                      # 열기
+            open_ch, open_len = ch, n
+        elif ch == open_ch and n >= open_len:  # 닫기: 같은 문자 + 같은 길이 이상
+            open_ch, open_len = "", 0
+    return bool(open_ch)
 # 인덱스 60자 안에 "언제 쓰는지"가 있는지. `Use when` 만 인정하면 `Use before`·`Use on`·
 # `Use after` 로 시작하는 정상 트리거를 놓친다(실측 3건 — 고쳐 놓고도 게이트가 계속 울렸다).
 TRIGGER_CUE = re.compile(
@@ -306,7 +332,17 @@ def main() -> int:
         print(f"skill_lint: skills dir not found: {root}", file=sys.stderr)
         return 2
 
-    paths = sorted(root.rglob("SKILL.md"))
+    # Hermes 는 디렉터리 심볼릭을 따라 스킬을 발견한다(skill_utils). 기본 rglob 도 따라가지만
+    # 플랫폼/버전에 따라 다르므로 심볼릭 링크를 명시적으로 확장한다 — 안 그러면 링크된 스킬의
+    # 깨진 참조가 조용히 검사 밖에 남는다.
+    found = set(root.rglob("SKILL.md"))
+    for link in root.rglob("*"):
+        if link.is_dir() and link.is_symlink():
+            try:
+                found |= set(link.rglob("SKILL.md"))
+            except OSError:
+                continue
+    paths = sorted(found)
     if not args.include_archive:
         paths = [p for p in paths if ".archive" not in p.relative_to(root).parts]
     findings: list[dict] = []
@@ -349,9 +385,9 @@ def main() -> int:
             findings.append(dict(sev="W", id="SKL011", file=rel,
                                  msg=f"SKILL.md {len(text)}자 (분할 후보)"))
 
-        # SKL023 — 코드펜스 짝. 홀수면 그 뒤 전체가 코드로 렌더돼 지시가 본문에서 사라진다.
-        # 분할 도구가 펜스 안의 `## ` 를 절 경계로 착각하면 정확히 이 모양이 된다(실측 1건).
-        if sum(1 for line in text.splitlines() if FENCE_OPEN.match(line)) % 2:
+        # SKL023 — 코드펜스 짝. 닫히지 않으면 그 뒤 전체가 코드로 렌더돼 지시가 본문에서 사라진다.
+        # 줄 개수만 세면 `~~~`/``` 혼용과 4중 백틱에서 틀린다 — orphan_fence 가 CommonMark 규칙대로 센다.
+        if orphan_fence(text):
             findings.append(dict(sev="E", id="SKL023", file=rel,
                                  msg="코드펜스 짝이 안 맞는다 — 이 뒤 본문이 전부 코드로 렌더된다"))
 
@@ -374,7 +410,9 @@ def main() -> int:
     # 오탐이 구조적으로 불가능하다. 하이픈 개수 같은 휴리스틱을 넣으면 두 단어짜리 스킬을 놓친다
     # (실제로 retired-security-skill 이 그렇게 빠져 테스트가 실패했다).
     if not args.include_archive:
-        names_re = re.compile(r"`([a-z0-9][a-z0-9-]{6,})`")
+        # 이름 길이 하한을 7자로 두면 `obsidian`·`docx`·`xurl` 같은 짧은 이름을 통째로 놓친다.
+        # 판정은 어차피 '아카이브에 그 이름이 있냐'라서 오탐 위험은 길이와 무관하다.
+        names_re = re.compile(r"`([a-z0-9][a-z0-9-]{2,})`")
         for p in paths:
             rel = str(p.relative_to(root))
             text = p.read_text(encoding="utf-8", errors="replace")
@@ -403,9 +441,17 @@ def main() -> int:
                                      msg=f"`{cand}/` 스킬을 참조하는데 이 설치본에 없다 — "
                                          f"레포 전용 스킬이면 경로를 `.claude/skills/` 로 명시하라"))
             elif not (root / cand / sub / fname).exists():
+                # 카테고리를 붙여도 파일이 없으면 여전히 못 연다 — 경로 형식만 보면 놓친다.
                 findings.append(dict(sev="W", id="SKL024", file=rel,
                                      msg=f"`{cand}/{sub}/{fname}` 는 `~/.hermes/skills/` 기준으로 "
-                                         f"열리지 않는다(스킬은 카테고리 아래에 있다) — 실제 경로를 적어라"))
+                                         f"열리지 않는다 — 카테고리를 붙여도 파일이 없다"))
+        for cat, cand, sub, fname in sorted(set(CROSS_LINK_CAT.findall(text))):
+            if cand == p.parent.name:
+                continue
+            if not (root / cat / cand / sub / fname).exists():
+                findings.append(dict(sev="W", id="SKL024", file=rel,
+                                     msg=f"`{cat}/{cand}/{sub}/{fname}` 파일이 없다 — "
+                                         f"카테고리까지 적었는데 경로가 틀린다"))
 
     if no_trigger:
         findings.append(dict(sev="W", id="SKL021", file="(index)",

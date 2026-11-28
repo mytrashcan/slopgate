@@ -42,7 +42,10 @@ FAR_FUTURE = dt.date(2099, 1, 1)
 # 소스가 검사 대상이 된 오탐이 있었다(2026-11-28).
 TEST_DIRS = frozenset(("test", "tests", "spec", "specs", "__tests__"))
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next", ".archive"}
-CODE_EXT = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt", ".rb", ".php", ".cs"}
+CODE_EXT = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt", ".rb", ".php", ".cs",
+            # JSON 픽스처가 흔한 자리다(API 응답 스냅샷, 설정 예제). 빠뜨리면 미래 날짜가
+            # 픽스처 안에 박혀 있어도 검사가 통째로 지나간다(2026-11-28).
+            ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg"}
 
 # 2026-12-31 / 2026/12/31  ('-' 와 '/' 만. '2026.12.31' 은 버전 문자열이 흔해서 제외)
 RE_DASH = re.compile(r"(?<!\d)((?:19|20)\d{2})[-/](0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])(?!\d)")
@@ -53,7 +56,7 @@ RE_DASH = re.compile(r"(?<!\d)((?:19|20)\d{2})[-/](0[1-9]|1[0-2])[-/](0[1-9]|[12
 RE_DOT = re.compile(
     r"(?<![\d.])((?:19|20)\d{2})\.(0?[1-9]|1[0-2])\.(3[01]|[12]\d|0?[1-9])(?![\d.]\d)(?!\d)")
 # 한국어 표기(2027년 3월 15일). 공고문을 그대로 옮긴 픽스처가 이 모양이다.
-RE_KOREAN = re.compile(r"((?:19|20)\d{2})\s*년\s*(0?[1-9]|1[0-2])\s*월\s*(0?[1-9]|[12]\d|3[01])\s*일")
+RE_KOREAN = re.compile(r"((?:19|20)\d{2})\s*년\s*(0?[1-9]|1[0-2])\s*월\s*(3[01]|[12]\d|0?[1-9])\s*일")
 # 왼쪽 식별자가 버전을 뜻하면 점 구분 날짜로 보지 않는다(CalVer 오탐 방지).
 # `APP_VERSION`·`app_version` 처럼 접두/접미가 붙은 이름도 잡아야 하므로 단어경계 대신
 # 구분자(`_`, 공백, 시작/끝)로 판정한다.
@@ -64,7 +67,7 @@ RE_COMPACT_WHOLE = re.compile(
 )
 # datetime(2026, 12, 31) / date(2030, 1, 1)
 RE_CTOR = re.compile(
-    r"(?:datetime|date|timestamp|DateTime|Timestamp)\s*\(\s*((?:19|20)\d{2})\s*,\s*(0?[1-9]|1[0-2])\s*,\s*(0?[1-9]|[12]\d|3[01])"
+    r"(?:datetime|date|timestamp|DateTime|Timestamp)\s*\(\s*((?:19|20)\d{2})\s*,\s*(1[0-2]|0?[1-9])\s*,\s*(3[01]|[12]\d|0?[1-9])"
 )
 # 한 줄 안의 문자열 리터럴 ('...' 또는 "...")
 RE_STRING = re.compile(r"""(?:"([^"\n]*)"|'([^'\n]*)')""")
@@ -90,8 +93,29 @@ def classify(d: dt.date, historical_max: dt.date) -> str:
     return "near-future"
 
 
+# 여러 줄에 걸친 생성자: `date(\n  2027,\n  3,\n  15\n)` — 포맷터가 흔히 이렇게 쓴다.
+# 줄 단위 스캔만 하면 놓치므로 파일 전체를 대상으로 한 번 더 본다.
+RE_CTOR_MULTILINE = re.compile(
+    r"(?:datetime|date|timestamp|DateTime|Timestamp)\s*\(\s*\n\s*((?:19|20)\d{2})\s*,\s*\n\s*"
+    r"(1[0-2]|0?[1-9])\s*,\s*\n\s*(3[01]|[12]\d|0?[1-9])")
+
+
 def scan_file(path: str, historical_max: dt.date) -> list[dict]:
     out: list[dict] = []
+    try:
+        text = path and open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return out
+    for m in RE_CTOR_MULTILINE.finditer(text):
+        y, mo, da = (int(x) for x in m.group(1, 2, 3))
+        try:
+            d = dt.date(y, mo, da)
+        except ValueError:
+            continue
+        if classify(d, historical_max) == "near-future":
+            ln = text[: m.start()].count("\n") + 1
+            out.append(dict(file=path, line=ln, date=d.isoformat(), kind="ctor-multiline",
+                            text=" ".join(m.group(0).split())[:60]))
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             for lineno, line in enumerate(fh, 1):
@@ -166,13 +190,45 @@ def scan_file(path: str, historical_max: dt.date) -> list[dict]:
     return out
 
 
-def iter_files(roots: list[str], allow: set[str]) -> tuple[list[str], list[str]]:
-    """(검사할 파일들, allow 로 제외된 파일들)을 돌려준다."""
+def _matches(path: str, roots: list[str], allow: set[str]) -> bool:
+    """allow 목록에 이 파일이 있나. 절대경로·상대경로·저장소 상대경로를 모두 인정한다.
+
+    왜 세 형태인가: `--allow-file tests/fixtures/x.py` 처럼 쓰면 사용자는 '저장소 기준'을 뜻하지만
+    `os.path.abspath` 는 **cwd 기준**으로 풀고, `roots` 로 들어온 경로는 또 다른 기준이다.
+    실제로 같은 인자가 cwd 에 따라 조용히 무시됐다(2026-11-28). 매칭이 '운 좋게 맞으면 동작'하면
+    사용자는 예외가 걸린 줄 알고 실제로는 위반이 계속 보고된다 — 게이트를 끄는 것과 같다.
+    """
+    ap = os.path.abspath(path)
+    if ap in allow or os.path.realpath(path) in allow:
+        return True
+    # 파일명만 준 경우(`--allow-file legacy.json`)도 인정한다 — 경로 전체를 요구하면
+    # 사용자가 축약형을 쓰고 조용히 무시된다.
+    if os.path.basename(path) in allow:
+        return True
+    for root in roots:
+        base = root if os.path.isdir(root) else os.path.dirname(root) or "."
+        rel = os.path.relpath(path, base)
+        if rel in allow or rel.replace(os.sep, "/") in allow:
+            return True
+        # root 기준 상대경로의 파일명 부분(`tests/x.py` 를 `x.py` 로 준 경우)
+        if os.path.basename(rel) in allow:
+            return True
+    return False
+
+
+def iter_files(roots: list[str], allow: set[str]) -> tuple[list[str], list[str], list[str]]:
+    """(검사할 파일들, allow 로 제외된 파일들, 존재하지 않는 root 목록)을 돌려준다."""
     keep: list[str] = []
     skipped: list[str] = []
+    missing: list[str] = []
     for root in roots:
         if os.path.isfile(root):
-            (skipped if os.path.abspath(root) in allow else keep).append(root)
+            (skipped if _matches(root, roots, allow) else keep).append(root)
+            continue
+        if not os.path.isdir(root):
+            # 없는 경로를 조용히 건너뛰면 '검사 0파일 · 위반 0건'이 통과로 보고된다 —
+            # 오타 난 경로로 게이트를 돌려도 초록이 나온다(2026-11-28).
+            missing.append(root)
             continue
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
@@ -180,8 +236,8 @@ def iter_files(roots: list[str], allow: set[str]) -> tuple[list[str], list[str]]
                 if os.path.splitext(fn)[1].lower() not in CODE_EXT:
                     continue
                 p = os.path.join(dirpath, fn)
-                (skipped if os.path.abspath(p) in allow else keep).append(p)
-    return keep, skipped
+                (skipped if _matches(p, roots, allow) else keep).append(p)
+    return keep, skipped, missing
 
 
 def main() -> int:
@@ -200,8 +256,9 @@ def main() -> int:
     # 기본: 앞으로 도래하는 날짜만 위반. --since 를 주면 그 날짜 이후 전부(과거 포함)를 위반으로 본다(감사 모드).
     historical_max = dt.date.fromisoformat(args.since) if args.since else today
 
-    allow = {os.path.abspath(p) for p in args.allow_file}
-    candidates, skipped = iter_files(args.roots, allow)
+    allow = {p if os.path.isabs(p) else p for p in args.allow_file}
+    allow |= {os.path.abspath(p) for p in args.allow_file}
+    candidates, skipped, missing = iter_files(args.roots, allow)
     violations: list[dict] = []
     scanned = 0
     for p in candidates:
@@ -219,6 +276,10 @@ def main() -> int:
                               skipped_files=len(skipped),
                               violations=violations), ensure_ascii=False, indent=2))
     else:
+        if missing:
+            # 오타 난 경로로 돌렸는데 초록불이 나오면 게이트가 '확인함'으로 오독된다.
+            for m in missing:
+                print(f"[E] DAT001: 경로가 존재하지 않는다: {m}")
         for v in violations:
             print(f"[E] DAT001 {v['file']}:{v['line']}: 앞으로 도래할 날짜 {v['date']} "
                   f"({v['kind']}: {v['text']}) — 지난 날짜(<= {today}) 또는 "
@@ -227,7 +288,7 @@ def main() -> int:
         mode = f"감사 모드(--since {args.since})" if args.since else f"기준일 {today}"
         print(f"\n검사 {scanned}파일{skip_note} · 위반 {len(violations)}건 "
               f"({mode} · 허용: <= {historical_max} 또는 >= {FAR_FUTURE})")
-    return 1 if violations else 0
+    return 2 if missing else (1 if violations else 0)
 
 
 if __name__ == "__main__":

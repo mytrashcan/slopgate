@@ -106,22 +106,41 @@ def main() -> int:
                                  msg=f"배달 실패: {str(j['last_delivery_error'])[:90]}"))
 
         # RT006 게이트가 조회에 실패한 채 침묵: 후보 없음과 구분되지 않는다
-        health = gate_state if name and "sweeper" in str(name).lower() else None
+        # 판정을 이름 문자열("sweeper")에 기대면 **잡지 이름을 바꾸는 순간 게이트가 죽는다** —
+        # 게다가 `--gate-state` 로 명시한 파일까지 무시했다(2026-11-28). 명시 인자는 항상 존중하고,
+        # 이름 매칭은 기본값일 때만 쓰는 약한 폴백으로 둔다.
+        if args.gate_state:
+            health: Path | None = gate_state
+        else:
+            health = SWEEPER_STATE if name and "sweeper" in str(name).lower() else None
         if health and health.exists():
             try:
-                streak = int(json.loads(health.read_text()).get("fetch_fail_streak") or 0)
+                data = json.loads(health.read_text())
             except (OSError, ValueError):
                 # 게이트 상태 파일을 못 읽었다. 이것을 streak=0('이상 없음')으로 처리하면
                 # 정확히 이 게이트가 존재하는 이유를 뒤집는 셈이다 — 확인 못 한 것을 문제 없음으로
                 # 보고하게 된다. 파일이 있는데 못 읽는 건 그 자체가 오류다.
-                streak = None
-            if streak is None:
+                data = None
+            if data is None:
                 findings.append(dict(sev="E", id="RT006", job=name,
                                      msg=f"게이트 상태 파일을 읽지 못했다({health.name}) — "
                                          f"'후보 없음'인지 '확인 못 함'인지 판정 불가"))
-            elif streak >= 3:
-                findings.append(dict(sev="E", id="RT006", job=name,
-                                     msg=f"게이트가 {streak}틱 연속 소스 조회 실패 — '후보 없음'이 아니라 '확인 못 함'이다"))
+            else:
+                try:
+                    if not isinstance(data, dict):
+                        raise TypeError(f"dict 아님({type(data).__name__})")
+                    streak = int(data.get("fetch_fail_streak") or 0)
+                except (AttributeError, TypeError, ValueError):
+                    # 구조가 틀린 상태 파일(dict 아님, 값이 숫자가 아님)도 '판정 불가'다.
+                    streak = None
+                if streak is None:
+                    findings.append(dict(sev="E", id="RT006", job=name,
+                                         msg=f"게이트 상태 파일 구조가 예상과 다르다({health.name}) — "
+                                             f"fetch_fail_streak 를 읽을 수 없다"))
+                elif streak >= 3:
+                    findings.append(dict(sev="E", id="RT006", job=name,
+                                         msg=f"게이트가 {streak}틱 연속 소스 조회 실패 — "
+                                             f"'후보 없음'이 아니라 '확인 못 함'이다"))
 
         # RT005 주기 대비 지연: 인터벌 작업이 기대의 2배 넘게 안 돌았다
         if interval and last_run and j.get("state") == "scheduled":
