@@ -789,6 +789,41 @@ def test_skill_lint_fence(tmp: str) -> None:
     check("펜스 안 헤딩이 있어도 짝만 맞으면 통과", "SKL023" not in out3, out3[:500])
 
 
+def test_skill_lint_cross_ref(tmp: str) -> None:
+    """SKL024 — 다른 스킬 디렉터리 파일을 상대경로로 지시했는데 그 스킬이 설치본에 없다.
+
+    왜 게이트인가: `references/x.md`(자기 것)는 SKL003이 잡지만 `some-skill/references/x.md`
+    (남의 것)는 정규식이 `references/` 로 '시작'하는 경로만 봐서 통째로 새어 나간다.
+    실제 사례: agent-semantic-layer 가 `write-for-reader/references/의도_발굴.md` 를 지시했는데
+    write-for-reader 는 레포 안에만 있었다 — 에이전트는 `skill_view` 로도, 파일로도 못 연다.
+    """
+    print("skill_lint (SKL024 크로스 스킬 참조)")
+    d = os.path.join(tmp, "skl24")
+    root = os.path.join(d, "skills")
+    head = "---\nname: {n}\ndescription: Use when testing cross-skill refs.\n---\n\n"
+
+    write(os.path.join(root, "caller", "SKILL.md"),
+          head.format(n="caller") + "work `write-for-reader/references/의도_발굴.md` first.\n")
+    code, out = run_gate("skill_lint.py", ["--skills-dir", root])
+    check("없는 스킬의 참조 파일을 지시하면 SKL024", "SKL024" in out and "write-for-reader" in out, out[:500])
+
+    # 레포 경로로 명시하면 통과 — 레포 전용 스킬을 가리키는 정당한 표기다
+    root2 = os.path.join(d, "skills2")
+    write(os.path.join(root2, "caller", "SKILL.md"),
+          head.format(n="caller") + "read `.claude/skills/write-for-reader/references/의도_발굴.md`.\n")
+    code2, out2 = run_gate("skill_lint.py", ["--skills-dir", root2])
+    check("`.claude/skills/...` 로 명시하면 침묵", "SKL024" not in out2, out2[:500])
+
+    # 실제로 존재하는 스킬을 가리키면 통과
+    root3 = os.path.join(d, "skills3")
+    write(os.path.join(root3, "target", "SKILL.md"), head.format(n="target") + "body\n")
+    write(os.path.join(root3, "target", "references", "x.md"), "내용\n")
+    write(os.path.join(root3, "caller", "SKILL.md"),
+          head.format(n="caller") + "see `target/references/x.md` for details.\n")
+    code3, out3 = run_gate("skill_lint.py", ["--skills-dir", root3])
+    check("설치본에 있는 스킬 참조는 통과", "SKL024" not in out3, out3[:500])
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="slopgate-tests-")
     try:
@@ -801,6 +836,7 @@ def main() -> int:
         test_skill_lint_archived_refs(tmp)
         test_skill_lint_overlap(tmp)
         test_skill_lint_fence(tmp)
+        test_skill_lint_cross_ref(tmp)
         test_split_skill(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

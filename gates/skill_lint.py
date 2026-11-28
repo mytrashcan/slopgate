@@ -30,6 +30,11 @@ DESC_WARN_CHARS = 120             # 파일 기준 권고치 (skill_manage API의
 BODY_WARN_CHARS = 40000           # 한 스킬이 이보다 크면 분할 후보
 
 REL_LINK = re.compile(r"`((?:references|templates|scripts|assets)/[^`\s]+\.[A-Za-z0-9]+)`")
+# 다른 스킬을 이름으로 부르는 참조: `some-skill/references/x.md`.
+# REL_LINK 는 `references/` 로 '시작'하는 경로만 보므로 이 꼴을 통째로 놓친다.
+# 실제 사례: agent-semantic-layer 가 `write-for-reader/references/의도_발굴.md` 를 지시했는데
+# 그 스킬은 Hermes 에 없고 레포 안에만 있었다 — 에이전트는 읽을 파일을 못 찾는다.
+CROSS_LINK = re.compile(r"`([a-z0-9][a-z0-9_-]*)/(?:references|templates|assets)/[^`\s]+\.[A-Za-z0-9]+`")
 FM = re.compile(r"\A---\r?\n(.*?)\r?\n---", re.S)
 
 
@@ -377,6 +382,19 @@ def main() -> int:
                 if (root / ".archive" / cand).exists():
                     findings.append(dict(sev="W", id="SKL004", file=rel,
                                          msg=f"아카이브된 스킬을 참조: {cand}"))
+
+    # SKL024 다른 스킬 디렉터리의 파일을 상대경로로 지시했는데 그 스킬이 이 설치본에 없다.
+    # `skill_view` 로도 못 열고 파일도 없으니, 지시를 받은 에이전트는 조용히 아무것도 못 읽는다.
+    # (레포 전용 스킬을 가리키는 경우가 흔하므로 경고다 — 다만 '레포 스킬'이라고 명시해야 한다.)
+    for p in paths:
+        rel = str(p.relative_to(root))
+        text = p.read_text(encoding="utf-8", errors="replace")
+        for cand in sorted(set(CROSS_LINK.findall(text))):
+            if cand in loaded or cand == p.parent.name:
+                continue
+            findings.append(dict(sev="W", id="SKL024", file=rel,
+                                 msg=f"`{cand}/` 스킬을 참조하는데 이 설치본에 없다 — "
+                                     f"레포 전용 스킬이면 경로를 `.claude/skills/` 로 명시하라"))
 
     if no_trigger:
         findings.append(dict(sev="W", id="SKL021", file="(index)",
