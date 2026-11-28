@@ -333,17 +333,36 @@ def test_date_bomb(tmp: str) -> None:
     d = os.path.join(tmp, "repo")
     write(os.path.join(d, "tests", "test_true.py"), textwrap.dedent('''\
         from datetime import date, datetime
-        A = "2026-12-31"
-        B = "20261215"
-        C = datetime(2030, 1, 1)
+        A = "2027-06-30"
+        B = "20271215"
+        C = datetime(2028, 1, 1)
         D = date(2027, 5, 1)
     '''))
-    dashes = run_gate("date_bomb.py", [d, "--since", "2026-07-31"])
-    check("dash 형식을 잡는다", "2026-12-31" in dashes[1], dashes[1][:400])
-    check("압축 형식을 잡는다", "2026-12-15" in dashes[1], dashes[1][:400])
-    check("생성자 형식을 잡는다", "2030-01-01" in dashes[1], dashes[1][:400])
+    dashes = run_gate("date_bomb.py", [d, "--today", "2026-11-28"])
+    check("dash 형식을 잡는다", "2027-06-30" in dashes[1], dashes[1][:400])
+    check("압축 형식을 잡는다", "2027-12-15" in dashes[1], dashes[1][:400])
+    check("생성자 형식을 잡는다", "2028-01-01" in dashes[1], dashes[1][:400])
     check("date() 생성자도 잡는다", "2027-05-01" in dashes[1], dashes[1][:400])
     check("위반 있으면 exit 1", dashes[0] == 1, f"exit={dashes[0]}")
+
+    # 세 축: 지난 날짜는 통과, 앞으로 올 날짜는 위반, 2099+ 는 통과
+    n = os.path.join(tmp, "near")
+    write(os.path.join(n, "tests", "test_near.py"), textwrap.dedent('''\
+        PAST = "2026-09-01"
+        SOON = "2026-12-31"
+        FAR = "2099-01-01"
+    '''))
+    code_n, out_n = run_gate("date_bomb.py", [n, "--today", "2026-11-28"])
+    check("이미 지난 날짜는 통과", "2026-09-01" not in out_n, out_n[:400])
+    check("앞으로 올 날짜는 잡는다", "2026-12-31" in out_n, out_n[:400])
+    # 메시지 본문에 'far-future(>= 2099-01-01)'가 들어가므로 줄 번호로 확인한다.
+    check("2099 이후는 통과", "test_near.py:3" not in out_n, out_n[:400])
+    check("지난/미래/먼미래 중 하나만 위반", out_n.count("[E] DAT001") == 1, out_n[:400])
+
+    # 감사 모드: --since 를 주면 이미 지난 날짜도 위반 (만료된 픽스처 찾기)
+    code_s, out_s = run_gate("date_bomb.py", [n, "--since", "2026-07-31"])
+    check("--since 감사 모드는 지난 날짜도 잡는다", "2026-09-01" in out_s, out_s[:400])
+    check("감사 모드 표시", "감사 모드" in out_s, out_s[:400])
 
     f = os.path.join(tmp, "fp")
     write(os.path.join(f, "tests", "test_fp.py"), textwrap.dedent('''\
@@ -356,7 +375,7 @@ def test_date_bomb(tmp: str) -> None:
         # comment 2026-12-31
         BAD_DATE = "2026-02-31"
     '''))
-    code, outs = run_gate("date_bomb.py", [f, "--since", "2026-07-31"])
+    code, outs = run_gate("date_bomb.py", [f, "--today", "2026-11-28"])
     check("버전 문자열은 오탐 없음", "2026.12.31" not in outs, outs[:400])
     check("맨 숫자(PORT/ID)는 오탐 없음", "도 20261231" not in outs, outs[:400])
     check("URL 쿼리 날짜는 오탐 없음", "d=2026-12-31" not in outs, outs[:400])
@@ -364,17 +383,26 @@ def test_date_bomb(tmp: str) -> None:
     check("존재하지 않는 날짜는 오탐 없음", "2026-02-31" not in outs, outs[:400])
     check("오탐만 있는 트리는 exit 0", code == 0, f"exit={code} {outs[:300]}")
 
+    # 경로 판정: 부분문자열이 아니라 경로 조각으로 본다 (contest_mcp 오탐 회귀 방지)
+    v = os.path.join(tmp, "paths")
+    write(os.path.join(v, "src", "contest_mcp", "util.py"), 'X = "2027-01-01"\n')
+    write(os.path.join(v, "tests", "test_x.py"), 'Y = "2027-01-01"\n')
+    code_p, out_p = run_gate("date_bomb.py", [v, "--today", "2026-11-28"])
+    check("이름에 test_ 가 들어간 소스는 검사하지 않는다",
+          "contest_mcp" not in out_p, out_p[:400])
+    check("tests/ 아래 파일은 검사한다", "test_x.py" in out_p, out_p[:400])
+
     # --all-files 로 테스트 아닌 파일도 검사
     g = os.path.join(tmp, "allf")
     write(os.path.join(g, "src", "mod.py"), "X = '2027-01-01'\n")
-    code_a, out_a = run_gate("date_bomb.py", [g, "--since", "2026-07-31"])
-    code_b, out_b = run_gate("date_bomb.py", [g, "--since", "2026-07-31", "--all-files"])
+    code_a, out_a = run_gate("date_bomb.py", [g, "--today", "2026-11-28"])
+    code_b, out_b = run_gate("date_bomb.py", [g, "--today", "2026-11-28", "--all-files"])
     check("기본은 테스트 파일만", code_a == 0, f"exit={code_a}")
     check("--all-files 는 전체 검사", code_b == 1 and "2027-01-01" in out_b, out_b[:300])
 
     # --allow-file 제외
     code_c, out_c = run_gate("date_bomb.py",
-                             [d, "--since", "2026-07-31", "--allow-file",
+                             [d, "--today", "2026-11-28", "--allow-file",
                               os.path.join(d, "tests", "test_true.py")])
     check("--allow-file 로 제외", code_c == 0, f"exit={code_c} {out_c[:200]}")
 

@@ -7,15 +7,21 @@
   습관적으로 쓴다. 그래서 검사로 만든다.
 
 규칙: 테스트 파일의 날짜 리터럴은
-  - far-future (>= FAR_FUTURE) 이거나
-  - historical (<= HISTORICAL_MAX) 이어야 한다.
-둘 사이의 '가까운 미래' 구간은 실패.
+  - far-future (>= FAR_FUTURE), 또는
+  - 이미 지난 날짜 (<= 오늘)
+이어야 한다. **앞으로 도래할 날짜만** 실패다.
 
-`--since` (기본: 90일 전) 를 HISTORICAL_MAX 로 쓴다. 즉 "이미 지난 날짜 또는 2099년 이후"만 허용.
+왜 '이미 지난 날짜'는 통과시키는가(2026-11-28 정정):
+  처음에는 `--since` 기본값을 "오늘−90일"로 두고 그 사이 구간도 위반으로 잡았다. 그런데 과거
+  날짜는 앞으로도 계속 과거다 — 시간이 지나서 조용히 깨질 수가 없다(이미 깨졌다면 테스트가
+  지금 실패해서 시끄럽다). 실측: contest-mcp 158건 중 136건이 이미 지난 날짜였고, 그 136건이
+  진짜 폭탄 22건을 덮고 있었다. 게이트가 소음이 되면 아무도 안 본다.
+  `--since DATE` 를 주면 그 날짜 이후(과거 포함)를 위반으로 잡는 **감사 모드**가 된다 —
+  \"이미 만료된 픽스처를 찾을 때\" 쓴다.
 
 사용:
     python3 gates/date_bomb.py <repo-or-dir> [<dir> ...]
-    python3 gates/date_bomb.py . --since 2026-07-31 --json
+    python3 gates/date_bomb.py . --since 2026-07-31 --json     # 감사 모드
     python3 gates/date_bomb.py . --allow-file tests/fixtures/legacy.json
 
 종료 코드: 위반이 있으면 1, 없으면 0.
@@ -30,10 +36,11 @@ import re
 import sys
 
 FAR_FUTURE = dt.date(2099, 1, 1)
-DEFAULT_HISTORICAL_WINDOW_DAYS = 90
 
-# 테스트로 간주하는 경로 (디렉터리 조각 또는 파일명 패턴)
-TEST_HINTS = ("/test/", "/tests/", "/spec/", "/__tests__/", "test_", "_test.", ".test.", ".spec.")
+# 테스트로 간주하는 경로. **부분문자열이 아니라 경로 조각으로** 판정한다 —
+# `contest-mcp/src/contest_mcp/util.py` 가 `test_` 를 포함한다고 테스트 파일로 분류돼
+# 소스가 검사 대상이 된 오탐이 있었다(2026-11-28).
+TEST_DIRS = frozenset(("test", "tests", "spec", "specs", "__tests__"))
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next", ".archive"}
 CODE_EXT = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt", ".rb", ".php", ".cs"}
 
@@ -52,8 +59,15 @@ RE_STRING = re.compile(r"""(?:"([^"\n]*)"|'([^'\n]*)')""")
 
 
 def is_test_path(path: str) -> bool:
-    low = path.replace(os.sep, "/").lower()
-    return any(h in low for h in TEST_HINTS)
+    """경로 조각 기준 판정. 디렉터리가 `test(s)/spec(s)/__tests__` 이거나 파일명이 테스트 규약일 때만."""
+    parts = path.replace(os.sep, "/").lower().split("/")
+    if not parts:
+        return False
+    base = parts[-1]
+    if any(seg in TEST_DIRS for seg in parts[:-1]):
+        return True
+    return (base.startswith("test_") or base.startswith("conftest")
+            or "_test." in base or ".test." in base or ".spec." in base)
 
 
 def classify(d: dt.date, historical_max: dt.date) -> str:
@@ -141,9 +155,8 @@ def iter_files(roots: list[str], allow: set[str]) -> tuple[list[str], list[str]]
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("roots", nargs="+", help="검사할 저장소/디렉터리/파일")
-    ap.add_argument("--since", help="historical 상한 (YYYY-MM-DD). 기본: 오늘-90일")
-    ap.add_argument("--window", type=int, default=DEFAULT_HISTORICAL_WINDOW_DAYS,
-                    help=f"--since 미지정 시 사용할 일수 (기본 {DEFAULT_HISTORICAL_WINDOW_DAYS})")
+    ap.add_argument("--since", help="감사 모드: 이 날짜 이후(과거 포함)를 위반으로 잡는다 (YYYY-MM-DD)")
+    ap.add_argument("--today", help="기준일 (YYYY-MM-DD). 기본: 오늘. 테스트가 시계에 의존하지 않게 한다")
     ap.add_argument("--all-files", action="store_true",
                     help="테스트 경로가 아닌 파일도 검사 (기본은 테스트 파일만)")
     ap.add_argument("--allow-file", action="append", default=[],
@@ -151,10 +164,9 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    if args.since:
-        historical_max = dt.date.fromisoformat(args.since)
-    else:
-        historical_max = dt.date.today() - dt.timedelta(days=args.window)
+    today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
+    # 기본: 앞으로 도래하는 날짜만 위반. --since 를 주면 그 날짜 이후 전부(과거 포함)를 위반으로 본다(감사 모드).
+    historical_max = dt.date.fromisoformat(args.since) if args.since else today
 
     allow = {os.path.abspath(p) for p in args.allow_file}
     candidates, skipped = iter_files(args.roots, allow)
@@ -167,19 +179,22 @@ def main() -> int:
         violations.extend(scan_file(p, historical_max))
 
     if args.json:
-        print(json.dumps(dict(historical_max=historical_max.isoformat(),
+        print(json.dumps(dict(today=today.isoformat(),
+                              historical_max=historical_max.isoformat(),
+                              audit_mode=bool(args.since),
                               far_future=FAR_FUTURE.isoformat(),
                               scanned_files=scanned,
                               skipped_files=len(skipped),
                               violations=violations), ensure_ascii=False, indent=2))
     else:
         for v in violations:
-            print(f"[E] DAT001 {v['file']}:{v['line']}: 가까운 미래 날짜 {v['date']} "
-                  f"({v['kind']}: {v['text']}) — historical(<= {historical_max}) 또는 "
+            print(f"[E] DAT001 {v['file']}:{v['line']}: 앞으로 도래할 날짜 {v['date']} "
+                  f"({v['kind']}: {v['text']}) — 지난 날짜(<= {today}) 또는 "
                   f"far-future(>= {FAR_FUTURE}) 로 바꿔라")
         skip_note = f", allow 제외 {len(skipped)}파일" if skipped else ""
+        mode = f"감사 모드(--since {args.since})" if args.since else f"기준일 {today}"
         print(f"\n검사 {scanned}파일{skip_note} · 위반 {len(violations)}건 "
-              f"(허용: <= {historical_max} 또는 >= {FAR_FUTURE})")
+              f"({mode} · 허용: <= {historical_max} 또는 >= {FAR_FUTURE})")
     return 1 if violations else 0
 
 

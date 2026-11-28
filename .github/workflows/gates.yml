@@ -45,4 +45,6 @@ jobs:
           python-version: "3.12"
       - name: 이 레포의 테스트 픽스처
         # tests/test_gates.py 는 일부러 위반 날짜를 담고 있는 (게이트 자체 테스트) 파일이라 제외한다.
-        run: python gates/date_bomb.py . --since 2026-07-31 --allow-file tests/test_gates.py
+        # 기본 모드는 '앞으로 도래하는 날짜'만 잡는다 — 이미 지난 날짜는 앞으로도 계속 과거라 안전하다.
+        # 만료된 픽스처를 찾고 싶으면 감사 모드: --since <날짜> (지난 날짜도 위반으로 본다)
+        run: python gates/date_bomb.py . --allow-file tests/test_gates.py
