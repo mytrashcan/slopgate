@@ -418,19 +418,37 @@ def main() -> int:
     # 오탐이 구조적으로 불가능하다. 하이픈 개수 같은 휴리스틱을 넣으면 두 단어짜리 스킬을 놓친다
     # (실제로 retired-security-skill 이 그렇게 빠져 테스트가 실패했다).
     if not args.include_archive:
-        # 이름 길이 하한을 7자로 두면 `obsidian`·`docx`·`xurl` 같은 짧은 이름을 통째로 놓친다.
-        # 판정은 어차피 '아카이브에 그 이름이 있냐'라서 오탐 위험은 길이와 무관하다.
+        # 판정 기준은 '길이'가 아니라 **그 자리에서 스킬을 부르는 형태인가**다.
+        # 이름 길이만 보고 3자까지 넓히면 `github`(org 계정·토픽), `pdf`(일반명사),
+        # `xurl`(CLI 도구), `p5js`(라이브러리)가 전부 '아카이브된 스킬 참조'로 오탐이 된다
+        # (실측 8건). 반대로 7자 하한은 `docx`·`xurl`·`git` 같은 진짜 참조를 놓친다.
+        # 그래서 **백틱 이름 + 스킬 동사/명사**가 같은 줄에 있을 때만 보고한다.
+        # '스킬을 부르는 자리'의 표지. `see the \`pdf\` skill`·`use \`p5js\`` 는 참조지만
+        # `\`github\` org account`·`topics like \`github\`` 는 일반명사다. 그래서 판정은
+        # **백틱 바로 앞뒤의 두 단어**만 본다 — 줄 전체를 보면 뒤쪽에 우연히 있는 동사에 걸린다.
+        BEFORE_CUE = re.compile(r"(?:\b(?:see|use|using|via|with|from|the|a)\s+)$", re.I)
+        AFTER_CUE = re.compile(r"^\s*(?:skill|skills|CLI|tool)\b", re.I)
+        # `\`name\` org` 처럼 소유격으로 이어지면 고유명사(조직·계정)다.
+        # `\`github\` org account`·`\`github\` topic` 처럼 조직/일반명사로 이어지는 형태.
+        OWNER_POSSESSIVE = re.compile(r"^\s*(?:'s\b|s'\b|org\b|account\b|topic\b)", re.I)
         names_re = re.compile(r"`([a-z0-9][a-z0-9-]{2,})`")
         for p in paths:
             rel = str(p.relative_to(root))
             text = p.read_text(encoding="utf-8", errors="replace")
-            for cand in sorted(set(names_re.findall(text))):
-                if cand in loaded:
-                    continue
-                # 아카이브에 있는 이름만 보고한다(원래 없던 이름은 오탐이 많다).
-                if (root / ".archive" / cand).exists():
+            for lineno, line in enumerate(text.splitlines(), 1):
+                for cand in sorted(set(names_re.findall(line))):
+                    if cand in loaded or cand == p.parent.name:
+                        continue
+                    if not (root / ".archive" / cand).exists():
+                        continue
+                    idx = line.find(f"`{cand}`")
+                    before, after = line[:idx], line[idx + len(cand) + 2:]
+                    if OWNER_POSSESSIVE.match(after):
+                        continue      # `\`github\` org account` — 조직 이름
+                    if not (BEFORE_CUE.search(before) or AFTER_CUE.search(after)):
+                        continue
                     findings.append(dict(sev="W", id="SKL004", file=rel,
-                                         msg=f"아카이브된 스킬을 참조: {cand}"))
+                                         msg=f"아카이브된 스킬을 참조: {cand} (L{lineno})"))
 
     # SKL024 다른 스킬 디렉터리를 **상대경로로** 지시했을 때, 그 표기가 실제로 열리는 경로인지 본다.
     # 두 경우 모두 결함이다:
