@@ -164,20 +164,34 @@ def apply(item: dict) -> dict:
                 raise RuntimeError(f"{m['ref']} 코드펜스가 짝이 안 맞는다 — 이관 절 경계가 펜스 안이다")
         path.write_text(new_text, encoding="utf-8")
 
-        # SKILL.md에 `references/...` 목록이 있으면 새 파일을 등록한다(없으면 만들지 않는다).
-        reg = re.compile(r"(?m)^\s*[-*]\s*`references/([\w.\-]+\.md)`")
-        listed = {m.group(1) for m in reg.finditer(new_text)}
+        # SKILL.md 에 `references/...` 목록이 있으면 새 파일을 등록한다(없으면 만들지 않는다).
+        # 두 표기를 모두 지원한다: 불릿 목록(`- \`references/x.md\``)과 표 행(`| [references/x.md](...) |`).
+        # 표만 지원하지 않으면 표 쓰는 스킬에서 새 파일이 어디에도 안 적혀 발견되지 않는다.
+        bullet_reg = re.compile(r"(?m)^\s*[-*]\s*`references/([\w.\-]+\.md)`")
+        table_reg = re.compile(r"(?m)^\s*\|.*\[references/([\w.\-]+\.md)\]")
+        listed = {m.group(1) for m in bullet_reg.finditer(new_text)}
+        listed |= {m.group(1) for m in table_reg.finditer(new_text)}
         added = []
         if listed:
             add = [Path(m["ref"]).name for m in moves if Path(m["ref"]).name not in listed]
             if add:
-                first = reg.search(new_text)
+                first = bullet_reg.search(new_text)
                 if first is not None:
                     line_end = new_text.index("\n", first.start())
                     ins = "".join(f"\n- `references/{n}` — 분할로 이관된 절" for n in add)
                     new_text = new_text[:line_end] + ins + new_text[line_end:]
                     path.write_text(new_text, encoding="utf-8")
                     added = add
+                else:
+                    row = table_reg.search(new_text)
+                    if row is not None:
+                        line_end = new_text.index("\n", row.start())
+                        ins = "".join(
+                            f"\n| [references/{n}](references/{n}) | 분할로 이관된 절 (포인터에서 연다) |"
+                            for n in add)
+                        new_text = new_text[:line_end] + ins + new_text[line_end:]
+                        path.write_text(new_text, encoding="utf-8")
+                        added = add
 
         after = len(path.read_text(encoding="utf-8"))
         return dict(skill=sd.name, ok=True, before=len(text), after=after,

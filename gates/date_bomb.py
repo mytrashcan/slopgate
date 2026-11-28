@@ -46,6 +46,18 @@ CODE_EXT = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt", "
 
 # 2026-12-31 / 2026/12/31  ('-' 와 '/' 만. '2026.12.31' 은 버전 문자열이 흔해서 제외)
 RE_DASH = re.compile(r"(?<!\d)((?:19|20)\d{2})[-/](0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])(?!\d)")
+# 점 구분(2026.12.20). 예전에는 "버전 문자열이 흔하다"는 이유로 통째로 제외했는데,
+# 한국 공고문·테스트 픽스처는 이 형식을 제일 많이 쓴다(contest-mcp 실측 7건이 전부 미검출이었다).
+# 오탐을 막기 위해 (a) 연도 4자리로 시작 (b) 월/일이 실제 범위 (c) 뒤에 `.숫자` 가 더 붙지 않을 때만
+# 인정한다 — `1.2.3` 같은 semver, `2026.12.31.1` 같은 4절 버전은 걸리지 않는다.
+RE_DOT = re.compile(
+    r"(?<![\d.])((?:19|20)\d{2})\.(0?[1-9]|1[0-2])\.(3[01]|[12]\d|0?[1-9])(?![\d.]\d)(?!\d)")
+# 한국어 표기(2027년 3월 15일). 공고문을 그대로 옮긴 픽스처가 이 모양이다.
+RE_KOREAN = re.compile(r"((?:19|20)\d{2})\s*년\s*(0?[1-9]|1[0-2])\s*월\s*(0?[1-9]|[12]\d|3[01])\s*일")
+# 왼쪽 식별자가 버전을 뜻하면 점 구분 날짜로 보지 않는다(CalVer 오탐 방지).
+# `APP_VERSION`·`app_version` 처럼 접두/접미가 붙은 이름도 잡아야 하므로 단어경계 대신
+# 구분자(`_`, 공백, 시작/끝)로 판정한다.
+VERSIONISH = re.compile(r"(?i)(?:^|[_\W])(?:ver|version|release|rev|pkg|metadata)(?:$|[_\W])")
 # 문자열 전체가 날짜(+선택적 시각)인 경우만: "20261231", "202608101000"
 RE_COMPACT_WHOLE = re.compile(
     r"\A((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{0,6}\Z"
@@ -111,6 +123,26 @@ def scan_file(path: str, historical_max: dt.date) -> list[dict]:
                     if classify(d, historical_max) == "near-future":
                         out.append(dict(file=path, line=lineno, date=d.isoformat(),
                                         kind="dash", text=m.group(0)))
+
+                for rx, kind in ((RE_DOT, "dot"), (RE_KOREAN, "korean")):
+                    for m in rx.finditer(line):
+                        if re.search(r"https?://\S*$", line[: m.start()]):
+                            continue
+                        # 점 구분은 CalVer(`VERSION = "2026.12.31"`)와 진짜 날짜가 똑같이 생겼다.
+                        # 왼쪽 식별자가 버전을 뜻하면 날짜로 보지 않는다 — 이 구분이 없으면
+                        # 버전 상수를 날짜로 오인해 게이트가 소음이 되고, 있으면 두 경우를 모두 맞힌다.
+                        lhs = line[: m.start()]
+                        assigned = lhs.split("=", 1)[0] if "=" in lhs else lhs
+                        if kind == "dot" and VERSIONISH.search(assigned):
+                            continue
+                        y, mo, da = (int(x) for x in m.group(1, 2, 3))
+                        try:
+                            d = dt.date(y, mo, da)
+                        except ValueError:
+                            continue
+                        if classify(d, historical_max) == "near-future":
+                            out.append(dict(file=path, line=lineno, date=d.isoformat(),
+                                            kind=kind, text=m.group(0)))
 
                 # 압축형은 '문자열 리터럴 전체가 날짜'일 때만 인정한다.
                 # 그냥 8자리 숫자(PORT, ID)나 긴 hex/UUID 조각은 날짜로 오인하면 오탐이 된다.

@@ -383,6 +383,26 @@ def test_date_bomb(tmp: str) -> None:
     check("존재하지 않는 날짜는 오탐 없음", "2026-02-31" not in outs, outs[:400])
     check("오탐만 있는 트리는 exit 0", code == 0, f"exit={code} {outs[:300]}")
 
+    # 점 구분(2026.12.20)·한국어(2027년 3월 15일) 표기도 날짜다. 예전에는 점 구분을 통째로
+    # 제외했는데("버전 문자열이 흔해서"), 한국 공고문 픽스처는 대부분 이 형식이라 진짜 폭탄이
+    # 전부 미검출이었다(contest-mcp에 7건). CalVer(`VERSION = "2026.12.31"`)는 식별자로 구분한다.
+    k = os.path.join(tmp, "dots")
+    write(os.path.join(k, "tests", "test_dot.py"),
+          'DEADLINE = "2027.03.15"\n'
+          'KOREAN = "2027년 3월 15일"\n'
+          'VERSION = "2026.12.31"\n'
+          'APP_VERSION = "2030.1.1"\n'
+          'PAST_DOT = "2025.03.15"\n'
+          'SEMVER = "1.2.3"\n'
+          'FOUR = "2026.12.31.1"\n')
+    code_k, out_k = run_gate("date_bomb.py", [k, "--today", "2026-11-28"])
+    check("점 구분 미래 날짜를 잡는다", "dot: 2027.03.15" in out_k, out_k[:500])
+    check("한국어 날짜를 잡는다", "korean: 2027년 3월 15일" in out_k, out_k[:500])
+    check("CalVer 버전 상수는 오탐 없음", "VERSION" not in out_k and "2030.1.1" not in out_k, out_k[:500])
+    check("지난 점 구분 날짜는 통과", "2025.03.15" not in out_k, out_k[:500])
+    check("semver·4절 버전은 오탐 없음", "1.2.3" not in out_k and "2026.12.31.1" not in out_k, out_k[:500])
+    check("점/한국어 위반은 2건만", out_k.count("[E] DAT001") == 2, out_k[:500])
+
     # 경로 판정: 부분문자열이 아니라 경로 조각으로 본다 (contest_mcp 오탐 회귀 방지)
     v = os.path.join(tmp, "paths")
     write(os.path.join(v, "src", "contest_mcp", "util.py"), 'X = "2027-01-01"\n')
