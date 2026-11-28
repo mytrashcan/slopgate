@@ -82,8 +82,20 @@ def main() -> int:
     if not jp.exists():
         print(f"cron_lint: jobs.json not found: {jp}", file=sys.stderr)
         return 2
-    raw = json.loads(jp.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(jp.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        # 깨진 입력은 '위반 1건'이 아니라 '검사 불가'다. traceback으로 죽으면 호출자(크론 러너)가
+        # 게이트 오류와 실제 위반을 구분하지 못하고, exit 1 이 '위반 있음'으로 오독된다.
+        print(f"cron_lint: jobs.json 읽기/파싱 실패: {e}", file=sys.stderr)
+        return 2
     jobs = raw.get("jobs", raw) if isinstance(raw, dict) else raw
+    if not isinstance(jobs, list):
+        # `{"jobs": {}}` 처럼 dict 면 아래 `for j in jobs` 가 키 문자열을 순회하며
+        # `j.get` 에서 AttributeError 로 죽는다. 구조가 틀린 것도 검사 불가다.
+        print(f"cron_lint: jobs.json 구조 오류 — jobs 가 배열이 아니다({type(jobs).__name__})",
+              file=sys.stderr)
+        return 2
     sdir = Path(os.path.expanduser(args.scripts_dir))
     skroot = Path(os.path.expanduser(args.skills_dir))
 

@@ -51,8 +51,19 @@ def main() -> int:
     if not jp.exists():
         print(f"runtime_check: jobs.json not found: {jp}", file=sys.stderr)
         return 2
-    raw = json.loads(jp.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(jp.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        # 깨진 입력은 '위반 1건'도 '이상 없음'도 아니다 — 검사 불가다. traceback으로 죽으면
+        # 호출자가 게이트 오류와 실제 위반을 구분하지 못한다(cron_lint 와 같은 계약).
+        print(f"runtime_check: jobs.json 읽기/파싱 실패: {e}", file=sys.stderr)
+        return 2
     jobs = raw.get("jobs", raw) if isinstance(raw, dict) else raw
+    if not isinstance(jobs, list):
+        # `{"jobs": {}}` 면 아래 루프가 키 문자열을 순회하며 조용히 0건으로 통과한다.
+        print(f"runtime_check: jobs.json 구조 오류 — jobs 가 배열이 아니다({type(jobs).__name__})",
+              file=sys.stderr)
+        return 2
     gate_state = Path(os.path.expanduser(args.gate_state or SWEEPER_STATE))
     now = parse_ts(args.now) if args.now else datetime.now(timezone.utc)
     if now is None:
@@ -100,8 +111,15 @@ def main() -> int:
             try:
                 streak = int(json.loads(health.read_text()).get("fetch_fail_streak") or 0)
             except (OSError, ValueError):
-                streak = 0
-            if streak >= 3:
+                # 게이트 상태 파일을 못 읽었다. 이것을 streak=0('이상 없음')으로 처리하면
+                # 정확히 이 게이트가 존재하는 이유를 뒤집는 셈이다 — 확인 못 한 것을 문제 없음으로
+                # 보고하게 된다. 파일이 있는데 못 읽는 건 그 자체가 오류다.
+                streak = None
+            if streak is None:
+                findings.append(dict(sev="E", id="RT006", job=name,
+                                     msg=f"게이트 상태 파일을 읽지 못했다({health.name}) — "
+                                         f"'후보 없음'인지 '확인 못 함'인지 판정 불가"))
+            elif streak >= 3:
                 findings.append(dict(sev="E", id="RT006", job=name,
                                      msg=f"게이트가 {streak}틱 연속 소스 조회 실패 — '후보 없음'이 아니라 '확인 못 함'이다"))
 

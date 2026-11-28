@@ -498,6 +498,24 @@ def test_runtime_check(tmp: str) -> None:
                                                  "--gate-state", os.path.join(tmp, "none.json")])
     check("RT006: 상태 파일이 없으면 그냥 통과", code12 == 0, out12[:300])
 
+    # RT006: '읽지 못한' 상태 파일과 '이상 없음'을 구분해야 한다.
+    # 예전에는 except 에서 streak=0 으로 삼켜서 깨진 상태 파일이 "오류 0"으로 통과했다 —
+    # 이 게이트가 존재하는 이유('확인 못 함' ≠ '후보 없음')를 스스로 뒤집는 결함이었다.
+    write(gp, "not json{{{")
+    code13, out13 = run_gate("runtime_check.py", ["--jobs", gjobs, "--now", iso,
+                                                 "--gate-state", gp])
+    check("RT006: 깨진 상태 파일은 '읽지 못했다'로 오류",
+          "RT006" in out13 and "읽지 못했다" in out13 and code13 == 1, out13[:400])
+
+    # 깨진 입력은 '위반'이 아니라 '검사 불가'(exit 2). traceback 이면 호출자가 구분 못 한다.
+    for gate in ("cron_lint.py", "runtime_check.py"):
+        for content, label in (("not json{{{", "깨진JSON"), ('{"jobs": {}}', "jobs가dict")):
+            bp = os.path.join(tmp, f"bad-{gate}-{label}.json")
+            write(bp, content)
+            code_b, out_b = run_gate(gate, ["--jobs", bp])
+            check(f"{gate}: {label} → exit 2 (traceback 아님)",
+                  code_b == 2 and "Traceback" not in out_b, f"exit={code_b} {out_b[:200]}")
+
 
 # ---------------------------------------------------------------- skill_lint SKL004
 def test_skill_lint_archived_refs(tmp: str) -> None:

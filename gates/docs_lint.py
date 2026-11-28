@@ -84,6 +84,10 @@ def scan(path: Path) -> list[dict]:
                 dated_section = False
         if DATED.search(line) or dated_section:
             continue
+        # 주석은 '작성자 메모'라 검사 대상이 아니다 — 단, **줄 전체가 주석일 때만**.
+        # 줄 중간의 `... <!-- docs-lint: fixed -->` 는 아래 fixed-표시 규칙이 처리한다.
+        # (구멍: `<!-- 어제는 970개였음 -->` 처럼 주석에 낡은 숫자를 숨길 수 있으나,
+        #  그 숫자는 본문이 아니라 이력 메모이므로 경고 대상이 아니다. 본문에 박으면 잡힌다.)
         if line.lstrip().startswith("<!--"):
             continue
         # 외부 고정 사실 표시는 그 줄에만 적용한다. 별도 줄로 두면 어느 줄을 면제하는지
